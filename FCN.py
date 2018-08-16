@@ -1,103 +1,79 @@
 """An implementation of the article - 'Fully Convolutional Network for Semantic Segmentation'.
 The article can be found: https://www.cv-foundation.org/openaccess/content_cvpr_2015/app/2B_011.pdf"""
+
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
-from keras.layers import Conv2D, MaxPool2D, Input, Dropout, Lambda
-
-from conv2d_transpose import Conv2DTranspose
-from keras import backend as K
-from keras.models import Model, Sequential
-from keras.utils import to_categorical
+# to suppress tensorflow messages
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
+# from keras.backend.tensorflow_backend import set_session
+# config = tf.ConfigProto()
+# config.gpu_options.allow_growth = True
+# config.gpu_options.per_process_gpu_memory_fraction = 1
+# set_session(tf.Session(config=config))
 
+from pympler import asizeof
+# from keras.preprocessing.image import ImageDataGenerator
 
+from utils import load_data_generator, as_keras_metric, new_except_hook, get_model_memory_usage, UpSampling2DBilinear, computeIoU, plot_images, crop2d
+from keras.layers import Conv2D, MaxPool2D, Input, Dropout, ZeroPadding2D, Conv2DTranspose, Activation, Add
+from os.path import join
+import time
+from keras import backend as K
+from keras.models import Model
+import gc
 import numpy as np
-from cv2 import imread
-from os import listdir
+
+import atexit
+import sys
 
 
 TRAINING_LABEL_FILE = "ADEChallengeData2016/annotations/training"
 TRAINING_DATA_FILE = "ADEChallengeData2016/images/training"
+VALIDATION_LABEL_FILE = "ADEChallengeData2016/annotations/validation"
+VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
+PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
+WEIGHT_FOLDER = 'weights'
+LOAD_FILE = None
+NUM_OF_CLASSES = 151
+SAMPLES_PER_EPOCH = 20210
 
 
-def weight_variable(shape):
-  initial = tf.truncated_normal(shape, stddev=0.1)
-  return tf.Variable(initial)
+@as_keras_metric
+def mean_iou( y_true, y_pred, num_classes=NUM_OF_CLASSES):
+    return tf.metrics.mean_iou(y_true, y_pred, num_classes)
 
-def bias_variable(shape):
-  initial = tf.constant(0.1, shape=shape)
-  return tf.Variable(initial)
-
-def conv2Dtranspose(prev, ks, filters, stride, padding='VALID'):
-    shape = tf.shape(prev)
-    W = weight_variable([ks, ks, shape[3], filters])
-    upsampling = tf.nn.conv2d_transpose(prev, filter=W, strides=[1, stride, stride, 1], padding=padding)
-    return upsampling
-
+def create_mean_iou(y_true, y_pred, num_classes=NUM_OF_CLASSES):
+    def my_mean_iou(y_true, y_pred):
+        return computeIoU(y_pred, y_true, num_classes)
+    return my_mean_iou
 
 class FCN:
 
-    def __init__(self, input_dim, num_labels, batch_size, learning_rate):
-        self.input_dim = input_dim
+    def __init__(self, num_labels, batch_size=1, learning_rate=None):
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.num_labels = num_labels
         self.model = None
 
+        self.files_missed = []
+        self.min_data = np.inf
+        self.max_data = -np.inf
+        self.min_res = np.inf
+        self.max_res = -np.inf
 
-    def load_model_from(self):
-        pass
 
+    def load_model_from(self, weight_file):
+        # load json and create model
+        # json_file = open('model.json', 'r')
+        # loaded_model_json = json_file.read()
+        # json_file.close()
+        # loaded_model = model_from_json(loaded_model_json)
+        # load weights into new model
+        self.model.load_weights(join(WEIGHT_FOLDER, weight_file))
+        print("Loaded model from disk")
 
-    def build_tf_model(self):
-        input_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, None, 3])
-        label_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, None, 151])
-        self.x = input_tensor
-        self.y = label_tensor
-        shape = tf.shape(input_tensor)
-
-        conv1_1 = tf.layers.conv2d(input_tensor ,kernel_size=3, filters=64, activation=tf.nn.relu)
-        conv1_2 = tf.layers.conv2d(conv1_1,filters=64, kernel_size=3, activation=tf.nn.relu)
-        pool_1 = tf.layers.max_pooling2d(conv1_2, strides=2, pool_size=2)
-
-        conv2_1 = tf.layers.conv2d(pool_1,filters=128, kernel_size=3, activation=tf.nn.relu)
-        conv2_2 = tf.layers.conv2d(conv2_1,filters=128, kernel_size=3, activation=tf.nn.relu)
-        pool_2 = tf.layers.max_pooling2d(conv2_2, strides=2, pool_size=2)
-
-        conv3_1 = tf.layers.conv2d(pool_2,filters=256, kernel_size=3, activation=tf.nn.relu)
-        conv3_2 = tf.layers.conv2d(conv3_1,filters=256, kernel_size=3, activation=tf.nn.relu)
-        conv3_3 = tf.layers.conv2d(conv3_2,filters=256, kernel_size=3, activation=tf.nn.relu)
-        pool_3 = tf.layers.max_pooling2d(conv3_3, strides=2, pool_size=2)
-
-        conv4_1 = tf.layers.conv2d(pool_3, filters=512, kernel_size=3, activation=tf.nn.relu)
-        conv4_2 = tf.layers.conv2d(conv4_1, filters=512, kernel_size=3, activation=tf.nn.relu)
-        conv4_3 = tf.layers.conv2d(conv4_2, filters=512, kernel_size=3, activation=tf.nn.relu)
-        pool_4 = tf.layers.max_pooling2d(conv4_3, strides=2, pool_size=2)
-
-        conv5_1 = tf.layers.conv2d(pool_4, filters=512, kernel_size=3, activation=tf.nn.relu)
-        conv5_2 = tf.layers.conv2d(conv5_1, filters=512, kernel_size=3, activation=tf.nn.relu)
-        conv5_3 = tf.layers.conv2d(conv5_2, filters=512, kernel_size=3, activation=tf.nn.relu)
-        pool_5 = tf.layers.max_pooling2d(conv5_3, strides=2, pool_size=2)
-        #till here is normal vgg
-        #fully conv
-        fc6 = tf.layers.conv2d(pool_5, filters=1024, kernel_size=7, activation=tf.nn.relu, padding='SAME')
-        drop6 = tf.layers.dropout(fc6, 0.5)
-        fc7 = tf.layers.conv2d(drop6, filters=1024, kernel_size=1, activation=tf.nn.relu)
-        drop7 = tf.layers.dropout(fc7, 0.5)
-        score_fr = tf.layers.conv2d(drop7, filters=self.num_labels, kernel_size=1, use_bias=False, name="score")
-        conv0_up = tf.layers.conv2d_transpose(drop7, self.num_labels, 32, 16)
-        # conv1_up = tf.layers.conv2d_transpose(conv0_up, 512, 4, 2)
-        # conv2_up = tf.layers.conv2d_transpose(conv1_up, 256, 4, 2)
-        # conv3_up = tf.layers.conv2d_transpose(conv2_up, 128, 4, 2)
-        # conv4_up = tf.layers.conv2d_transpose(conv0_up, 151, 32, 16)
-        upsampling = tf.image.resize_bilinear(conv0_up, shape[1:3])
-        cross_entropy = tf.nn.softmax_cross_entropy_with_logits_v2(labels=label_tensor, logits=upsampling)
-        output = tf.argmax(tf.nn.softmax(upsampling), axis=3)
-        loss = tf.reduce_mean(cross_entropy)
-        train_step = tf.train.AdamOptimizer(1e-4).minimize(loss)
-        return output, train_step, [conv0_up, pool_1, pool_2, pool_3, pool_4, pool_5], score_fr
 
 
     def build_network(self):
@@ -105,198 +81,238 @@ class FCN:
         Creates a fully convolutional network with including upsampling.
         :return: the network
         """
+
         image_input = Input(shape=(None, None, 3))
-        shape = K.shape(image_input)
+        input_shape = K.shape(image_input)
 
+        # padding = ZeroPadding2D(100, input_shape=(None, None, 3))(image_input)
 
-
-        conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu')(image_input)
-        conv1_2 = Conv2D(filters=64, kernel_size=3, activation='relu')(conv1_1)
+        conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu', name="conv1_1", padding='same')(image_input)
+        conv1_2 = Conv2D(filters=64, kernel_size=3, activation='relu', name="conv1_2", padding='same')(conv1_1)
         pool_1 = MaxPool2D(strides=2)(conv1_2)
 
-        conv2_1 = Conv2D(filters=128, kernel_size=3, activation='relu')(pool_1)
-        conv2_2 = Conv2D(filters=128, kernel_size=3, activation='relu')(conv2_1)
+        conv2_1 = Conv2D(filters=128, kernel_size=3, activation='relu', name="conv2_1", padding='same')(pool_1)
+        conv2_2 = Conv2D(filters=128, kernel_size=3, activation='relu', name="conv2_2", padding='same')(conv2_1)
         pool_2 = MaxPool2D(strides=2)(conv2_2)
 
-        conv3_1 = Conv2D(filters=256, kernel_size=3, activation='relu')(pool_2)
-        conv3_2 = Conv2D(filters=256, kernel_size=3, activation='relu')(conv3_1)
-        conv3_3 = Conv2D(filters=256, kernel_size=3, activation='relu')(conv3_2)
+        conv3_1 = Conv2D(filters=256, kernel_size=3, activation='relu', name="conv3_1", padding='same')(pool_2)
+        conv3_2 = Conv2D(filters=256, kernel_size=3, activation='relu', name="conv3_2", padding='same')(conv3_1)
+        conv3_3 = Conv2D(filters=256, kernel_size=3, activation='relu', name="conv3_3", padding='same')(conv3_2)
         pool_3 = MaxPool2D(strides=2)(conv3_3)
+        self.pool3 = Model(input=image_input, output=pool_3)
 
-        conv4_1 = Conv2D(filters=512, kernel_size=3, activation='relu')(pool_3)
-        conv4_2 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv4_1)
-        conv4_3 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv4_2)
+        conv4_1 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv4_1", padding='same')(pool_3)
+        conv4_2 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv4_2", padding='same')(conv4_1)
+        conv4_3 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv4_3", padding='same')(conv4_2)
         pool_4 = MaxPool2D(strides=2)(conv4_3)
+        self.pool4 = Model(input=image_input, output=pool_4)
 
-        conv5_1 = Conv2D(filters=512, kernel_size=3, activation='relu')(pool_4)
-        conv5_2 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv5_1)
-        conv5_3 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv5_2)
+        conv5_1 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv5_1", padding='same')(pool_4)
+        conv5_2 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv5_2", padding='same')(conv5_1)
+        conv5_3 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv5_3", padding='same')(conv5_2)
         pool_5 = MaxPool2D(strides=2)(conv5_3)
 
         #fully conv
-        fc6 = Conv2D(filters=4096, kernel_size=7, activation='relu')(pool_5)
+        fc6 = Conv2D(filters=4096, kernel_size=7, activation='relu', name="fc6", padding='same')(pool_5)
         drop6 = Dropout(0.5)(fc6)
-        fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu')(drop6)
+        fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu', name="fc7", padding='same')(drop6)
         drop7 = Dropout(0.5)(fc7)
-        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, use_bias=False)(drop7)
-        upsampling = UpSampling2DBilinear(shape[1:3])(score_fr)
-        # deconv = Conv2DTranspose(filters=self.num_labels, kernel_size=64, strides=32, activation='softmax')(score_fr)
+        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, use_bias=False, name="fc8", padding='same')(drop7)
+        self.score_fr = Model(input=image_input, output=score_fr)
+        deconv1 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv1")(score_fr) #deconv 32
+        self.deconv1 = Model(input=image_input, output=deconv1)
+        crop_deconv1 = crop2d(pool_4)(deconv1)
+        self.crop1 = Model(input=image_input, output=crop_deconv1)
+        skip1 = Conv2D(filters=self.num_labels, kernel_size=1, padding='same', activation=None, name='score_pool4')(pool_4)
+        self.skip1 = Model(input=image_input, output=skip1)
+        add_pool_4 = Add()([skip1, crop_deconv1])
 
-        self.model = Model(inputs=image_input, outputs=upsampling)
-        self.model.compile(optimizer='adam', loss='categorical_crossentropy')
-        return upsampling
+        self.add_pool4 = Model(input=image_input, output=add_pool_4)
+        deconv2 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv2")(add_pool_4)
+        self.deconv2 = Model(input=image_input, output=deconv2)
+        crop_deconv2 = crop2d(pool_3)(deconv2)
+        self.crop2 = Model(input=image_input, output=crop_deconv2)
 
-    def build_sequential_model(self):
-        self.model = Sequential()
+        skip2 = Conv2D(filters=self.num_labels, kernel_size=1, activation=None, name="score_pool3", padding="same")(pool_3)
+        self.skip2 = Model(input=image_input, output=skip2)
+        add_pool_3 = Add()([skip2, crop_deconv2])
 
-        image_input = Input(shape=(None, None, 3))
-        shape = K.shape(image_input)
-
-        conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu')(image_input)
-        conv1_2 = Conv2D(filters=64, kernel_size=3, activation='relu')(conv1_1)
-        pool_1 = MaxPool2D(strides=2)(conv1_2)
-
-        conv2_1 = Conv2D(filters=128, kernel_size=3, activation='relu')(pool_1)
-        conv2_2 = Conv2D(filters=128, kernel_size=3, activation='relu')(conv2_1)
-        pool_2 = MaxPool2D(strides=2)(conv2_2)
-
-        conv3_1 = Conv2D(filters=256, kernel_size=3, activation='relu')(pool_2)
-        conv3_2 = Conv2D(filters=256, kernel_size=3, activation='relu')(conv3_1)
-        conv3_3 = Conv2D(filters=256, kernel_size=3, activation='relu')(conv3_2)
-        pool_3 = MaxPool2D(strides=2)(conv3_3)
-
-        conv4_1 = Conv2D(filters=512, kernel_size=3, activation='relu')(pool_3)
-        conv4_2 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv4_1)
-        conv4_3 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv4_2)
-        pool_4 = MaxPool2D(strides=2)(conv4_3)
-
-        conv5_1 = Conv2D(filters=512, kernel_size=3, activation='relu')(pool_4)
-        conv5_2 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv5_1)
-        conv5_3 = Conv2D(filters=512, kernel_size=3, activation='relu')(conv5_2)
-        pool_5 = MaxPool2D(strides=2)(conv5_3)
-
-        # fully conv
-        fc6 = Conv2D(filters=4096, kernel_size=7, activation='relu')(pool_5)
-        drop6 = Dropout(0.5)(fc6)
-        fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu')(drop6)
-        drop7 = Dropout(0.5)(fc7)
-        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, use_bias=False)(drop7)
-        upsampling = UpSampling2DBilinear(shape[1:3])(score_fr)
-        # deconv = Conv2DTranspose(filters=self.num_labels, kernel_size=64, strides=32, activation='softmax')(score_fr)
-
-        self.model = Model(inputs=image_input, outputs=upsampling)
-        self.model.compile(optimizer='adam', loss='categorical_crossentropy')
-        return upsampling
+        deconv3 = Conv2DTranspose(filters= self.num_labels, kernel_size=16, strides=8, activation=None, name="final")(add_pool_3)
+        crop_deconv3 = crop2d(image_input)(deconv3)
 
 
-    def train_keras(self, data, label):
-        self.model.fit(data, label)
+        output = Activation('softmax', name="softmax_layer")(crop_deconv3)
+        self.model = Model(inputs=image_input, outputs=output)
+        self.set_keras_weights()
+        self.model.compile(optimizer='adadelta', loss='categorical_crossentropy', metrics=['accuracy', mean_iou])
+        return output
 
 
-    def train_network(self, output, train_step, data, labels, layers):
-        """Trains the network readjusting the weights accordingly"""
-        with tf.Session() as sess:
-            init = tf.global_variables_initializer()
-            sess.run(init)
-            for i in range(len(data)):
-                out = sess.run([output, train_step] + layers, feed_dict={self.x: data[i], self.y: labels[i]})
-                print(out)
+    def set_keras_weights(self):
+        weights = np.load("vgg16.npy", encoding='latin1').item()
+        weights['fc6'][0] = weights['fc6'][0].reshape(7,7,512,4096)
+        weights['fc7'][0] = weights['fc7'][0].reshape(1, 1, 4096, 4096)
+        for layer in self.model.layers:
+            if layer.name in weights:
+                if layer.name == 'fc8':
+                # if layer.name == 'fc8':
+                    continue
+                layer.set_weights(weights[layer.name])
 
-        print("model successfully trained")
+    def train_keras(self, data_file, label_file, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
+        data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=9, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
+        test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=10, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
+        while True:
+            try:
+                self.model.fit_generator(data_generator, max_queue_size=1, steps_per_epoch=20, validation_data=test_generator, verbose=1, validation_steps=5)
+            except Exception as e :
+                print(e)
+                continue
 
-    def save_network(self, network, filename):
-        pass
 
-    def test_network(self, data, labels):
+    def train_keras_gpu(self, data_file, label_file, test_interval=10, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
+        file_num = 1
+        mean_IoU = 0
+        IoU = []
+        second_past = time.time()
+        data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=10, batch_size=self.batch_size, shuffle=True)
+        test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True)
+        for data, label, selection in data_generator:
+
+            size_of_data = asizeof.asizeof(data)
+            resolution_data = np.size(data)
+            try:
+                if selection in self.files_missed:
+                    with tf.device('/cpu:0'):
+                        print("using cpu")
+                        self.model.fit(data, label, verbose=2)
+                else:
+                    with tf.device('/gpu:0'):
+                        print("using gpu")
+                        self.model.fit(data, label, verbose=2)
+
+                    if self.max_res < resolution_data:
+                        self.max_res = resolution_data
+                        print("new max resolution : ", resolution_data)
+                    if self.max_data < size_of_data:
+                        print("new maxsize : ", size_of_data)
+                        self.max_data = size_of_data
+            except tf.errors.ResourceExhaustedError as re:
+                print("error occured using cpu")
+                print(re)
+                if self.min_res > resolution_data:
+                    self.min_res = resolution_data
+                    print("new minresolution : ", resolution_data)
+                if self.min_data > size_of_data:
+                    print("new minsize : ", size_of_data)
+                    self.min_data = size_of_data
+                self.files_missed += list(selection)
+            except KeyboardInterrupt as kb:
+                break
+            except Exception as e:
+                print(e)
+
+
+            del data
+            del label
+            gc.collect()
+            print("Images Processed : ", file_num)
+
+            if file_num % test_interval == 0:
+                IoU += [self.test_network(test_generator, num_of_batches=5)]
+                mean_IoU = (IoU[-1]*((file_num/test_interval) - 1) + mean_IoU) / (file_num/test_interval)
+                real_IoU = np.mean(np.array(IoU))
+                print("mean IOU: ", mean_IoU, real_IoU)
+
+            if file_num % 100 == 0:
+                self.save_network('weights_{0}'.format(real_IoU))
+            print("Mean seconds  per image : {0}".format((time.time()-second_past)/file_num))
+            file_num += 1
+
+        print("Number of files missed", self.files_missed, "\n")
+
+        #steps per epoch = num_samples/batch size
+        # self.model.fit_generator(data_generator, steps_per_epoch=SAMPLES_PER_EPOCH, max_queue_size=1)
+
+
+    def save_network(self, file_name='weights'):
+        self.model.save_weights(join(WEIGHT_FOLDER,"{0}.h5".format(file_name)))
+        print("weights Saved")
+        # model_json = self.model.to_json()
+        # with open("model.json", "w") as json_file:
+        #     json_file.write(model_json)
+
+
+    def on_exit(self):
+        a = input("save weights ? (y/n) : \n")
+        if a == 'y':
+            self.model.save_weights(join(WEIGHT_FOLDER, "auto_exit_weights3.h5"))
+            print("weights saved")
+        print("Number of files missed during run : ", len(self.files_missed), "\n")
+        print(self.files_missed)
+        print("Max data size without exception: ", self.max_data)
+        print("Max img resolution without exception: ", self.max_res)
+        print("Min data size that caused exception: ", self.min_data)
+        print("Min img resolution that caused exception: ", self.min_res)
+
+    def test_network(self, data_generator, num_of_batches=5):
+        IoU = []
         if self.model:
-            y = self.model.predict(data)
+            i = 0
+            while i < num_of_batches:
+                data, label, selection = next(data_generator)
+                i += 1
+                try:
+                    y_pred = self.model.predict(data)
+                except Exception as error:
+                    print(error)
+                    continue
+                IoU += [tf.metrics.mean_iou(label, y_pred, self.num_labels)]
+                # IoU += [computeIoU(y_pred,label, self.num_labels)]
+                print(IoU)
+            mean = np.mean(np.array(IoU))
+            print(mean)
+            return mean
 
-            print(y)
 
-
-
-def load_data(sample_file, label_file, num_classes):
-    data = load_images(sample_file)
-    labels = load_images(label_file)
-    for i, label in enumerate(labels):
-        height, width, channels = labels[i].shape
-        data[i] = data[i].reshape(1,height, width, 3)
-        data[i] = data[i].astype(np.float32)
-        labels[i] = np.reshape(to_categorical(label[:,:,0], num_classes), (1,height,width,num_classes))
-    return data, labels
-
-def load_images(folder, num_of_images=20):
-    dataset = []
-    for _file in listdir(folder)[:num_of_images]:
-        img = imread(folder + "/" + _file)
-        dataset.append(img)
-    return dataset
 
 def main():
-    data, labels = load_data(TRAINING_DATA_FILE, TRAINING_LABEL_FILE, 151)
-    net = FCN(1,151,1,1)
+    net = FCN(num_labels=NUM_OF_CLASSES, batch_size=1)
     net.build_network()
-    for i in range(len(data)):
-        net.train_keras(data[i].astype(np.float32), labels[i])
-
-    #
-    # output, train_step, up_layers, score = net.build_tf_model()
-    # net.train_network(output, train_step, data,labels, layers=up_layers+[score])
-
-def UpSampling2DBilinear(size):
-    return Lambda(lambda x: tf.image.resize_bilinear(x, size, align_corners=True))
+    if LOAD_FILE and LOAD_FILE != "":
+        net.load_model_from(LOAD_FILE)
+    # incase of uncaught exception or CTRL+C saves the weights and prints stuff
+    #  NOTE: DOES NOT include pycharm stop button because that sends a SIGKILL
+    atexit.register(lambda x: x.on_exit(), net)
+    # runs on every uncaught exception
+    sys.excepthook = new_except_hook(net)
 
 
+    print(get_model_memory_usage(1, net.model))
+    print(net.model.summary())
 
-def get_bilinear_filter(filter_shape, upscale_factor):
-    ##filter_shape is [width, height, num_in_channels, num_out_channels]
-    kernel_size = filter_shape[1]
-    ### Centre location of the filter for which value is calculated
-    if kernel_size % 2 == 1:
-        centre_location = upscale_factor - 1
-    else:
-        centre_location = upscale_factor - 0.5
+    net.train_keras(TRAINING_DATA_FILE, TRAINING_LABEL_FILE)
+    data_gen = load_data_generator(VALIDATION_DATA_FILE, VALIDATION_LABEL_FILE, net.num_labels, shuffle=True, preload=1)
+    for image, labels, selection in data_gen:
+        print(image[0].shape)
+        print("printing pool3: " ,net.pool3.predict(image).shape)
+        print("printing pool4: " ,net.pool4.predict(image).shape)
+        print("printing deconv1: " ,net.deconv1.predict(image).shape)
+        print("printing crop1: " ,net.crop1.predict(image).shape)
+        print("printing skip1: " ,net.skip1.predict(image).shape)
+        print("printing deconv2: " ,net.deconv2.predict(image).shape)
+        print("printing crop2: " ,net.crop2.predict(image).shape)
+        print("printing skip2: " ,net.skip2.predict(image).shape)
 
-    bilinear = np.zeros([filter_shape[0], filter_shape[1]])
-    for x in range(filter_shape[0]):
-        for y in range(filter_shape[1]):
-            ##Interpolation Calculation
-            value = (1 - abs((x - centre_location) / upscale_factor)) * (
-                        1 - abs((y - centre_location) / upscale_factor))
-            bilinear[x, y] = value
-    weights = np.zeros(filter_shape)
-    for i in range(filter_shape[2]):
-        weights[:, :, i, i] = bilinear
-    init = tf.constant_initializer(value=weights,
-                                   dtype=tf.float32)
+        pred = net.model.predict(image)
+        label = tf.constant(labels[0][0])
+        predict = tf.constant(pred[0])
+        print(computeIoU(y_true_batch=labels, y_pred_batch=pred, num_labels=net.num_labels))
+        plot_images(image[0][0], labels[0][0], pred[0])
+    # net.test_network(data_gen, num_of_batches=100)
+    # net.save_network()
 
-    bilinear_weights = tf.get_variable(name="decon_bilinear_filter", initializer=init,
-                                       shape=weights.shape)
-    return bilinear_weights
-
-
-
-def upsample_layer(bottom,
-                   n_channels, name, upscale_factor):
-    kernel_size = 2 * upscale_factor - upscale_factor % 2
-    stride = upscale_factor
-    strides = [1, stride, stride, 1]
-    with tf.variable_scope(name):
-        # Shape of the bottom tensor
-        in_shape = tf.shape(bottom)
-
-        h = ((in_shape[1] - 1) * stride) + 1
-        w = ((in_shape[2] - 1) * stride) + 1
-        new_shape = [in_shape[0], h, w, n_channels]
-        output_shape = tf.stack(new_shape)
-
-        filter_shape = [kernel_size, kernel_size, n_channels, n_channels]
-
-        weights = get_bilinear_filter(filter_shape, upscale_factor)
-        deconv = tf.nn.conv2d_transpose(bottom, weights, output_shape,
-                                        strides=strides, padding='SAME')
-
-    return deconv
+    print("finished")
 
 if __name__ == '__main__':
     main()

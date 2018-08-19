@@ -16,12 +16,13 @@ import tensorflow as tf
 from pympler import asizeof
 # from keras.preprocessing.image import ImageDataGenerator
 
-from utils import load_data_generator, as_keras_metric, new_except_hook, get_model_memory_usage, UpSampling2DBilinear, computeIoU, plot_images, crop2d
+from utils import load_data_generator, as_keras_metric, new_except_hook, get_model_memory_usage, get_bilinear_filter, computeIoU, plot_images, crop2d
 from keras.layers import Conv2D, MaxPool2D, Input, Dropout, ZeroPadding2D, Conv2DTranspose, Activation, Add
 from os.path import join
 import time
 from keras import backend as K
 from keras.models import Model
+from keras.callbacks import ModelCheckpoint
 import gc
 import numpy as np
 
@@ -35,6 +36,7 @@ VALIDATION_LABEL_FILE = "ADEChallengeData2016/annotations/validation"
 VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 WEIGHT_FOLDER = 'weights'
+WEIGHT_FILE = "weights.hdf5"
 LOAD_FILE = None
 NUM_OF_CLASSES = 151
 SAMPLES_PER_EPOCH = 20210
@@ -155,19 +157,22 @@ class FCN:
         for layer in self.model.layers:
             if layer.name in weights:
                 if layer.name == 'fc8':
-                # if layer.name == 'fc8':
                     continue
                 layer.set_weights(weights[layer.name])
+            if layer.name in ['deconv1', "deconv2", "final"]:
+                current_weights = layer.get_weights()
+                bilinear_weights = get_bilinear_filter(current_weights[0].shape, layer.strides[0])
+                layer.set_weights([bilinear_weights, current_weights[1]])
+
+
 
     def train_keras(self, data_file, label_file, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
         data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=9, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
         test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=10, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
-        while True:
-            try:
-                self.model.fit_generator(data_generator, max_queue_size=1, steps_per_epoch=20, validation_data=test_generator, verbose=1, validation_steps=5)
-            except Exception as e :
-                print(e)
-                continue
+        filepath = os.path.join(WEIGHT_FOLDER, WEIGHT_FILE)
+        checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+        callback_list = [checkpoint]
+        self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=20, validation_data=test_generator, verbose=1, validation_steps=5, epochs=10000)
 
 
     def train_keras_gpu(self, data_file, label_file, test_interval=10, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
@@ -246,7 +251,7 @@ class FCN:
     def on_exit(self):
         a = input("save weights ? (y/n) : \n")
         if a == 'y':
-            self.model.save_weights(join(WEIGHT_FOLDER, "auto_exit_weights3.h5"))
+            self.model.save_weights(join(WEIGHT_FOLDER, "auto_exit_weights.h5"))
             print("weights saved")
         print("Number of files missed during run : ", len(self.files_missed), "\n")
         print(self.files_missed)
@@ -294,15 +299,15 @@ def main():
     net.train_keras(TRAINING_DATA_FILE, TRAINING_LABEL_FILE)
     data_gen = load_data_generator(VALIDATION_DATA_FILE, VALIDATION_LABEL_FILE, net.num_labels, shuffle=True, preload=1)
     for image, labels, selection in data_gen:
-        print(image[0].shape)
-        print("printing pool3: " ,net.pool3.predict(image).shape)
-        print("printing pool4: " ,net.pool4.predict(image).shape)
-        print("printing deconv1: " ,net.deconv1.predict(image).shape)
-        print("printing crop1: " ,net.crop1.predict(image).shape)
-        print("printing skip1: " ,net.skip1.predict(image).shape)
-        print("printing deconv2: " ,net.deconv2.predict(image).shape)
-        print("printing crop2: " ,net.crop2.predict(image).shape)
-        print("printing skip2: " ,net.skip2.predict(image).shape)
+        # print(image[0].shape)
+        # print("printing pool3: " ,net.pool3.predict(image).shape)
+        # print("printing pool4: " ,net.pool4.predict(image).shape)
+        # print("printing deconv1: " ,net.deconv1.predict(image).shape)
+        # print("printing crop1: " ,net.crop1.predict(image).shape)
+        # print("printing skip1: " ,net.skip1.predict(image).shape)
+        # print("printing deconv2: " ,net.deconv2.predict(image).shape)
+        # print("printing crop2: " ,net.crop2.predict(image).shape)
+        # print("printing skip2: " ,net.skip2.predict(image).shape)
 
         pred = net.model.predict(image)
         label = tf.constant(labels[0][0])

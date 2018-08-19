@@ -135,12 +135,14 @@ def get_bilinear_filter(filter_shape, upscale_factor):
     weights = np.zeros(filter_shape)
     for i in range(filter_shape[2]):
         weights[:, :, i, i] = bilinear
-    init = tf.constant_initializer(value=weights,
-                                   dtype=tf.float32)
 
-    bilinear_weights = tf.get_variable(name="decon_bilinear_filter", initializer=init,
-                                       shape=weights.shape)
-    return bilinear_weights
+    return weights
+    # init = tf.constant_initializer(value=weights,
+    #                                dtype=tf.float32)
+
+    # bilinear_weights = tf.get_variable(name="decon_bilinear_filter", initializer=init,
+    #                                    shape=weights.shape)
+    # return bilinear_weights
 
 
 def get_model_memory_usage(batch_size, model):

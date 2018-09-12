@@ -2,8 +2,8 @@
 The article can be found: https://www.cv-foundation.org/openaccess/content_cvpr_2015/app/2B_011.pdf"""
 
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # to suppress tensorflow messages
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
@@ -37,7 +37,7 @@ VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 WEIGHT_FOLDER = 'weights'
 WEIGHT_FILE = "weights.hdf5"
-LOAD_FILE = None
+LOAD_FILE = "weights.h5"
 NUM_OF_CLASSES = 151
 SAMPLES_PER_EPOCH = 20210
 
@@ -172,7 +172,7 @@ class FCN:
         filepath = os.path.join(WEIGHT_FOLDER, WEIGHT_FILE)
         checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
         callback_list = [checkpoint]
-        self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=20, validation_data=test_generator, verbose=1, validation_steps=5, epochs=10000)
+        self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=2000, validation_data=test_generator, verbose=1, validation_steps=5, epochs=50)
 
 
     def train_keras_gpu(self, data_file, label_file, test_interval=10, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
@@ -249,10 +249,11 @@ class FCN:
 
 
     def on_exit(self):
-        a = input("save weights ? (y/n) : \n")
+        weight_path = join(WEIGHT_FOLDER,"auto_exit_weights.h5")
+        a = input("save weights to {0} ? (y/n) : \n".format(weight_path))
         if a == 'y':
-            self.model.save_weights(join(WEIGHT_FOLDER, "auto_exit_weights.h5"))
-            print("weights saved")
+            self.model.save_weights(weight_path)
+            print("weights saved to : {0}".format(weight_path))
         print("Number of files missed during run : ", len(self.files_missed), "\n")
         print(self.files_missed)
         print("Max data size without exception: ", self.max_data)

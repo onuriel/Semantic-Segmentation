@@ -19,11 +19,9 @@ from pympler import asizeof
 from utils import load_data_generator, as_keras_metric, new_except_hook, get_model_memory_usage, get_bilinear_filter, computeIoU, plot_images, CroppingLike2D
 from keras.layers import Conv2D, MaxPool2D, Input, Dropout, ZeroPadding2D, Conv2DTranspose, Activation, Add
 from os.path import join
-import time
 from keras import backend as K
 from keras.models import Model, load_model
-from keras.callbacks import ModelCheckpoint
-import gc
+from keras.callbacks import ModelCheckpoint, LambdaCallback
 import numpy as np
 import pickle
 import atexit
@@ -36,11 +34,12 @@ VALIDATION_LABEL_FILE = "ADEChallengeData2016/annotations/validation"
 VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 WEIGHT_FOLDER = 'weights'
-WEIGHT_FILE = "weights.hdf5"
-LOAD_WEIGHT_FILE = "auto_exit_weights.h5"
+WEIGHT_FILE = "weights"
+LOAD_WEIGHT_FILE = "weights"
 #LOAD_FILE = WEIGHT_FILE
-LOAD_MODEL_FILE = "saved_model.h5"
+LOAD_MODEL_FILE = None
 MODEL_FOLDER = "models"
+OPTOMIZER_FILE = 'optimizer.pkl'
 
 NUM_OF_CLASSES = 151
 SAMPLES_PER_EPOCH = 20210
@@ -57,28 +56,24 @@ def create_mean_iou(y_true, y_pred, num_classes=NUM_OF_CLASSES):
 
 class FCN:
 
-    def __init__(self, num_labels, batch_size=1, learning_rate=None):
+    def __init__(self, num_labels, batch_size=1, load_model_from=None):
         self.batch_size = batch_size
-        self.learning_rate = learning_rate
         self.num_labels = num_labels
         self.model = None
 
-        self.files_missed = []
-        self.min_data = np.inf
-        self.max_data = -np.inf
-        self.min_res = np.inf
-        self.max_res = -np.inf
 
-
-    def load_model_from(self, weight_file):
+    def load_weights_and_opt_state(self, weight_file=WEIGHT_FILE):
         # load json and create model
         # json_file = open('model.json', 'r')
         # loaded_model_json = json_file.read()
         # json_file.close()
         # loaded_model = model_from_json(loaded_model_json)
         # load weights into new model
-
-        self.model.load_weights(join(WEIGHT_FOLDER, weight_file))
+        self.model.load_weights(join(WEIGHT_FOLDER, "{0}.h5".format(weight_file)))
+        self.model._make_train_function()
+        with open(join(WEIGHT_FOLDER,"{0}_{1}".format(weight_file, OPTOMIZER_FILE)), 'rb') as f:
+            weight_values = pickle.load(f)
+        self.model.optimizer.set_weights(weight_values)
         print("Loaded model from disk")
 
 
@@ -153,7 +148,7 @@ class FCN:
 
         output = Activation('softmax', name="softmax_layer")(crop_deconv3)
         self.model = Model(inputs=image_input, outputs=output)
-        if LOAD_WEIGHT_FILE is None:
+        if LOAD_WEIGHT_FILE is None and LOAD_MODEL_FILE is None:
             self.set_keras_weights()
         self.model.compile(optimizer='adadelta', loss='categorical_crossentropy', metrics=['accuracy'])
         return output
@@ -178,34 +173,39 @@ class FCN:
     def train_keras(self, data_file, label_file, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
         data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
         test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
-        checkpoint = ModelCheckpoint(join(MODEL_FOLDER, "saved_model.h5"), monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+        # checkpoint = ModelCheckpoint(join(WEIGHT_FOLDER, "weights.h5"), monitor='val_acc', verbose=1, save_best_only=True, mode='max', save_weights_only=True)
+        checkpoint = LambdaCallback(on_epoch_end=self.save_weights_and_opt_state())
         callback_list = [checkpoint]
         history = self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=2000, validation_data=test_generator, verbose=1, validation_steps=20, epochs=50, callbacks=callback_list)
         self.save_network("final_model")
         with open('trainHistoryDict', 'wb') as file_pi:
             pickle.dump(history.history, file_pi)
 
+    def save_weights_and_opt_state(self, prefix=None):
+        model_name = "model"
+        weight_name = "weights"
+        if prefix is not None:
+            model_name = "{0}_{1}".format(prefix, model_name)
+            weight_name = "{0}_{1}".format(prefix, weight_name)
 
-    def save_network(self, file_name='model'):
-        self.model.save(join(MODEL_FOLDER,"{0}.h5".format(file_name)))
+        self.model.save(join(MODEL_FOLDER, "{0}.h5".format(model_name)))
+        self.model.save_weights(join(WEIGHT_FOLDER, "{0}.h5".format(weight_name)))
+        symbolic_weights = getattr(self.model.optimizer, 'weights')
+        weight_values = K.batch_get_value(symbolic_weights)
+        with open(join(WEIGHT_FOLDER, "{0}_{1}".format(weight_name,OPTOMIZER_FILE)), 'wb') as f:
+            pickle.dump(weight_values, f)
+
+
+    def save_network(self, file_prefix):
+        self.save_weights_and_opt_state(file_prefix)
         print("model Saved")
-        # model_json = self.model.to_json()
-        # with open("model.json", "w") as json_file:
-        #     json_file.write(model_json)
-
 
     def on_exit(self):
-        model_path = 'auto_exit_model'
+        model_path = 'auto_exit'
         a = input("save model to {0} ? (y/n) : \n".format(model_path))
         if a == 'y':
             self.save_network(model_path)
             print("weights saved to : {0}.h5".format(model_path))
-        print("Number of files missed during run : ", len(self.files_missed), "\n")
-        print(self.files_missed)
-        print("Max data size without exception: ", self.max_data)
-        print("Max img resolution without exception: ", self.max_res)
-        print("Min data size that caused exception: ", self.min_data)
-        print("Min img resolution that caused exception: ", self.min_res)
 
     def test_network(self, data_generator, num_of_batches=5):
         IoU = []
@@ -236,7 +236,8 @@ def main():
     else:
         net.build_network()
         if LOAD_WEIGHT_FILE and LOAD_WEIGHT_FILE != "":
-            net.load_model_from(LOAD_WEIGHT_FILE)
+            net.load_weights_and_opt_state(LOAD_WEIGHT_FILE)
+            print("loaded weights and optimizer weights")
                             
                 
     # incase of uncaught exception or CTRL+C saves the weights and prints stuff

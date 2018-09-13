@@ -1,16 +1,43 @@
 import numpy as np
 import sys
 from cv2 import imread
+from os import getpid
 from os import listdir
 from os.path import join
 from keras.utils import to_categorical
 import tensorflow as tf
 import keras.backend as K
 from keras.layers import Lambda, Cropping2D
+from keras.engine import InputSpec, Layer
 SYSTEM_EXCEPT_HOOK = sys.excepthook
 import functools
 import matplotlib.pyplot as plt
+import psutil
+MEGA = 10 ** 6
+MEGA_STR = ' ' * MEGA
 
+
+class CroppingLike2D(Layer):
+    def __init__(self, target=None, num_classes=151, **kwargs):
+        """Crop to target.
+        If only one `offset` is set, then all dimensions are offset by this amount.
+        """
+        super(CroppingLike2D, self).__init__(**kwargs)
+        self.data_format = "channels_last"
+        self.target_shape = (None, None, None, num_classes)
+        self.target = K.zeros(shape=(1,1,1,1))  if target is None else target
+        self.input_spec = InputSpec(ndim=4)
+
+    def compute_output_shape(self, input_shape):
+        return (input_shape[0],
+                self.target_shape[1],
+                self.target_shape[2],
+                input_shape[3])
+    def call(self, inputs, **kwargs):
+        orig_shape = K.shape(self.target)
+        input_image = inputs[0]
+        return tf.image.crop_to_bounding_box(input_image, 0, 0, orig_shape[1], orig_shape[2])
+                                                                                                                        
 
 def crop2d(orig_image):
     # deconv_shape = K.shape(deconv_image)
@@ -35,6 +62,18 @@ def as_keras_metric(method):
 
 def computeIoU(y_pred_batch, y_true_batch, num_labels):
     return np.mean(np.asarray([pixelAccuracy(y_pred_batch[i], y_true_batch[i], num_labels) for i in range(len(y_true_batch))]))
+
+def print_memory_usage():
+    """Prints current memory usage stats.
+    See: https://stackoverflow.com/a/15495136
+    :return: None
+     """
+    PROCESS = psutil.Process(getpid())
+    total, available, percent, used, free = psutil.virtual_memory()[:5]
+    total, available, used, free = total / MEGA, available / MEGA, used / MEGA, free / MEGA
+    proc = PROCESS.memory_info()[1] / MEGA
+    print('process = %s total = %s available = %s used = %s free = %s percent = %s' % (proc, total, available, used, free, percent))
+
 
 def pixelAccuracy(y_pred, y_true, num_classes):
     shape = np.shape(y_pred)
@@ -61,7 +100,7 @@ def load_data(sample_file, label_file, num_classes):
 
 def load_images(folder, num_of_images=20, cursor=0, selection=None):
     dataset = []
-    lists_of_files = listdir(folder)
+    lists_of_files = sorted(listdir(folder))
     if selection is not None:
         for i in selection:
             img = imread(join(folder, lists_of_files[i]))
@@ -90,6 +129,7 @@ def load_data_generator(sample_file, label_file, num_classes=151, preload=10, ba
                 yield data[i:i+batch_size], labels[i:i+batch_size], selection[i:i+batch_size]
             else:
                 print(selection[i:i+batch_size])
+                print_memory_usage()
                 yield data[i:i+batch_size], labels[i:i+batch_size]
         cursor += preload
     return

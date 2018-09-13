@@ -2,8 +2,8 @@
 The article can be found: https://www.cv-foundation.org/openaccess/content_cvpr_2015/app/2B_011.pdf"""
 
 import os
-# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # to suppress tensorflow messages
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
@@ -16,16 +16,16 @@ import tensorflow as tf
 from pympler import asizeof
 # from keras.preprocessing.image import ImageDataGenerator
 
-from utils import load_data_generator, as_keras_metric, new_except_hook, get_model_memory_usage, get_bilinear_filter, computeIoU, plot_images, crop2d
+from utils import load_data_generator, as_keras_metric, new_except_hook, get_model_memory_usage, get_bilinear_filter, computeIoU, plot_images, CroppingLike2D
 from keras.layers import Conv2D, MaxPool2D, Input, Dropout, ZeroPadding2D, Conv2DTranspose, Activation, Add
 from os.path import join
 import time
 from keras import backend as K
-from keras.models import Model
+from keras.models import Model, load_model
 from keras.callbacks import ModelCheckpoint
 import gc
 import numpy as np
-
+import pickle
 import atexit
 import sys
 
@@ -37,7 +37,11 @@ VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 WEIGHT_FOLDER = 'weights'
 WEIGHT_FILE = "weights.hdf5"
-LOAD_FILE = "weights.h5"
+LOAD_FILE = "auto_exit_weights.h5"
+#LOAD_FILE = WEIGHT_FILE
+LOAD_MODEL_FILE = "saved_model"
+MODEL_FOLDER = "models"
+
 NUM_OF_CLASSES = 151
 SAMPLES_PER_EPOCH = 20210
 
@@ -73,6 +77,7 @@ class FCN:
         # json_file.close()
         # loaded_model = model_from_json(loaded_model_json)
         # load weights into new model
+
         self.model.load_weights(join(WEIGHT_FOLDER, weight_file))
         print("Loaded model from disk")
 
@@ -122,8 +127,9 @@ class FCN:
         score_fr = Conv2D(filters=self.num_labels, kernel_size=1, use_bias=False, name="fc8", padding='same')(drop7)
         self.score_fr = Model(input=image_input, output=score_fr)
         deconv1 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv1")(score_fr) #deconv 32
-        self.deconv1 = Model(input=image_input, output=deconv1)
-        crop_deconv1 = crop2d(pool_4)(deconv1)
+        self.deconv1 = Model(input=image_input, output=deconv1) 
+        crop_deconv1 = CroppingLike2D(pool_4, num_classes=self.num_labels)(deconv1)
+        #crop_deconv1 = crop2d(pool_4)(deconv1)
         self.crop1 = Model(input=image_input, output=crop_deconv1)
         skip1 = Conv2D(filters=self.num_labels, kernel_size=1, padding='same', activation=None, name='score_pool4')(pool_4)
         self.skip1 = Model(input=image_input, output=skip1)
@@ -132,7 +138,8 @@ class FCN:
         self.add_pool4 = Model(input=image_input, output=add_pool_4)
         deconv2 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv2")(add_pool_4)
         self.deconv2 = Model(input=image_input, output=deconv2)
-        crop_deconv2 = crop2d(pool_3)(deconv2)
+        crop_deconv2 = CroppingLike2D(pool_3, self.num_labels)(deconv2)
+        #crop_deconv2 = crop2d(pool_3)(deconv2)
         self.crop2 = Model(input=image_input, output=crop_deconv2)
 
         skip2 = Conv2D(filters=self.num_labels, kernel_size=1, activation=None, name="score_pool3", padding="same")(pool_3)
@@ -140,13 +147,14 @@ class FCN:
         add_pool_3 = Add()([skip2, crop_deconv2])
 
         deconv3 = Conv2DTranspose(filters= self.num_labels, kernel_size=16, strides=8, activation=None, name="final")(add_pool_3)
-        crop_deconv3 = crop2d(image_input)(deconv3)
+        #crop_deconv3 = crop2d(image_input)(deconv3)
+        crop_deconv3 = CroppingLike2D(image_input, self.num_labels)(deconv3)
 
 
         output = Activation('softmax', name="softmax_layer")(crop_deconv3)
         self.model = Model(inputs=image_input, outputs=output)
         self.set_keras_weights()
-        self.model.compile(optimizer='adadelta', loss='categorical_crossentropy', metrics=['accuracy', mean_iou])
+        self.model.compile(optimizer='adadelta', loss='categorical_crossentropy', metrics=['accuracy'])
         return output
 
 
@@ -167,12 +175,14 @@ class FCN:
 
 
     def train_keras(self, data_file, label_file, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
-        data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=9, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
-        test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=10, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
-        filepath = os.path.join(WEIGHT_FOLDER, WEIGHT_FILE)
-        checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+        data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
+        test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
+        checkpoint = ModelCheckpoint("saved_model", monitor='val_acc', verbose=1, save_best_only=True, mode='max')
         callback_list = [checkpoint]
-        self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=2000, validation_data=test_generator, verbose=1, validation_steps=5, epochs=50)
+        history = self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=2000, validation_data=test_generator, verbose=1, validation_steps=20, epochs=50, callbacks=callback_list)
+        self.save_network("final_model")
+        with open('trainHistoryDict', 'wb') as file_pi:
+            pickle.dump(history.history, file_pi)
 
 
     def train_keras_gpu(self, data_file, label_file, test_interval=10, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
@@ -240,20 +250,20 @@ class FCN:
         # self.model.fit_generator(data_generator, steps_per_epoch=SAMPLES_PER_EPOCH, max_queue_size=1)
 
 
-    def save_network(self, file_name='weights'):
-        self.model.save_weights(join(WEIGHT_FOLDER,"{0}.h5".format(file_name)))
-        print("weights Saved")
+    def save_network(self, file_name='model'):
+        self.model.save(join(MODEL_FOLDER,"{0}.h5".format(file_name)))
+        print("model Saved")
         # model_json = self.model.to_json()
         # with open("model.json", "w") as json_file:
         #     json_file.write(model_json)
 
 
     def on_exit(self):
-        weight_path = join(WEIGHT_FOLDER,"auto_exit_weights.h5")
-        a = input("save weights to {0} ? (y/n) : \n".format(weight_path))
+        model_path = 'auto_exit_model'
+        a = input("save model to {0} ? (y/n) : \n".format(model_path))
         if a == 'y':
-            self.model.save_weights(weight_path)
-            print("weights saved to : {0}".format(weight_path))
+            self.save_network(model_path)
+            print("weights saved to : {0}.h5".format(model_path))
         print("Number of files missed during run : ", len(self.files_missed), "\n")
         print(self.files_missed)
         print("Max data size without exception: ", self.max_data)
@@ -283,10 +293,17 @@ class FCN:
 
 
 def main():
+    
     net = FCN(num_labels=NUM_OF_CLASSES, batch_size=1)
-    net.build_network()
-    if LOAD_FILE and LOAD_FILE != "":
-        net.load_model_from(LOAD_FILE)
+    if LOAD_MODEL_FILE and LOAD_MODEL_FILE != "":
+        net.model = load_model(join(MODEL_FOLDER,LOAD_MODEL_FILE), custom_objects={"CroppingLike2D": CroppingLike2D})
+        print("loaded existing model")
+    else:
+        net.build_network()
+        if LOAD_FILE and LOAD_FILE != "":
+            net.load_model_from(LOAD_FILE)
+                            
+                
     # incase of uncaught exception or CTRL+C saves the weights and prints stuff
     #  NOTE: DOES NOT include pycharm stop button because that sends a SIGKILL
     atexit.register(lambda x: x.on_exit(), net)

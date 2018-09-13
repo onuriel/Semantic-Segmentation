@@ -2,8 +2,8 @@
 The article can be found: https://www.cv-foundation.org/openaccess/content_cvpr_2015/app/2B_011.pdf"""
 
 import os
-#os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
-#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # to suppress tensorflow messages
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
@@ -37,9 +37,9 @@ VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 WEIGHT_FOLDER = 'weights'
 WEIGHT_FILE = "weights.hdf5"
-LOAD_FILE = "auto_exit_weights.h5"
+LOAD_WEIGHT_FILE = "auto_exit_weights.h5"
 #LOAD_FILE = WEIGHT_FILE
-LOAD_MODEL_FILE = "saved_model"
+LOAD_MODEL_FILE = "saved_model.h5"
 MODEL_FOLDER = "models"
 
 NUM_OF_CLASSES = 151
@@ -153,7 +153,8 @@ class FCN:
 
         output = Activation('softmax', name="softmax_layer")(crop_deconv3)
         self.model = Model(inputs=image_input, outputs=output)
-        self.set_keras_weights()
+        if LOAD_WEIGHT_FILE is None:
+            self.set_keras_weights()
         self.model.compile(optimizer='adadelta', loss='categorical_crossentropy', metrics=['accuracy'])
         return output
 
@@ -177,77 +178,12 @@ class FCN:
     def train_keras(self, data_file, label_file, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
         data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
         test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True, return_with_selection=False)
-        checkpoint = ModelCheckpoint("saved_model", monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+        checkpoint = ModelCheckpoint(join(MODEL_FOLDER, "saved_model.h5"), monitor='val_acc', verbose=1, save_best_only=True, mode='max')
         callback_list = [checkpoint]
         history = self.model.fit_generator(data_generator, max_queue_size=4, steps_per_epoch=2000, validation_data=test_generator, verbose=1, validation_steps=20, epochs=50, callbacks=callback_list)
         self.save_network("final_model")
         with open('trainHistoryDict', 'wb') as file_pi:
             pickle.dump(history.history, file_pi)
-
-
-    def train_keras_gpu(self, data_file, label_file, test_interval=10, test_data_file=VALIDATION_DATA_FILE, test_label_file=VALIDATION_LABEL_FILE):
-        file_num = 1
-        mean_IoU = 0
-        IoU = []
-        second_past = time.time()
-        data_generator = load_data_generator(data_file, label_file, num_classes=self.num_labels, preload=10, batch_size=self.batch_size, shuffle=True)
-        test_generator = load_data_generator(test_data_file, test_label_file, num_classes=self.num_labels, preload=5, batch_size=self.batch_size, shuffle=True)
-        for data, label, selection in data_generator:
-
-            size_of_data = asizeof.asizeof(data)
-            resolution_data = np.size(data)
-            try:
-                if selection in self.files_missed:
-                    with tf.device('/cpu:0'):
-                        print("using cpu")
-                        self.model.fit(data, label, verbose=2)
-                else:
-                    with tf.device('/gpu:0'):
-                        print("using gpu")
-                        self.model.fit(data, label, verbose=2)
-
-                    if self.max_res < resolution_data:
-                        self.max_res = resolution_data
-                        print("new max resolution : ", resolution_data)
-                    if self.max_data < size_of_data:
-                        print("new maxsize : ", size_of_data)
-                        self.max_data = size_of_data
-            except tf.errors.ResourceExhaustedError as re:
-                print("error occured using cpu")
-                print(re)
-                if self.min_res > resolution_data:
-                    self.min_res = resolution_data
-                    print("new minresolution : ", resolution_data)
-                if self.min_data > size_of_data:
-                    print("new minsize : ", size_of_data)
-                    self.min_data = size_of_data
-                self.files_missed += list(selection)
-            except KeyboardInterrupt as kb:
-                break
-            except Exception as e:
-                print(e)
-
-
-            del data
-            del label
-            gc.collect()
-            print("Images Processed : ", file_num)
-
-            if file_num % test_interval == 0:
-                IoU += [self.test_network(test_generator, num_of_batches=5)]
-                mean_IoU = (IoU[-1]*((file_num/test_interval) - 1) + mean_IoU) / (file_num/test_interval)
-                real_IoU = np.mean(np.array(IoU))
-                print("mean IOU: ", mean_IoU, real_IoU)
-
-            if file_num % 100 == 0:
-                self.save_network('weights_{0}'.format(real_IoU))
-            print("Mean seconds  per image : {0}".format((time.time()-second_past)/file_num))
-            file_num += 1
-
-        print("Number of files missed", self.files_missed, "\n")
-
-        #steps per epoch = num_samples/batch size
-        # self.model.fit_generator(data_generator, steps_per_epoch=SAMPLES_PER_EPOCH, max_queue_size=1)
 
 
     def save_network(self, file_name='model'):
@@ -293,15 +229,14 @@ class FCN:
 
 
 def main():
-    
     net = FCN(num_labels=NUM_OF_CLASSES, batch_size=1)
-    if LOAD_MODEL_FILE and LOAD_MODEL_FILE != "":
+    if LOAD_MODEL_FILE is not None and LOAD_MODEL_FILE != "":
         net.model = load_model(join(MODEL_FOLDER,LOAD_MODEL_FILE), custom_objects={"CroppingLike2D": CroppingLike2D})
         print("loaded existing model")
     else:
         net.build_network()
-        if LOAD_FILE and LOAD_FILE != "":
-            net.load_model_from(LOAD_FILE)
+        if LOAD_WEIGHT_FILE and LOAD_WEIGHT_FILE != "":
+            net.load_model_from(LOAD_WEIGHT_FILE)
                             
                 
     # incase of uncaught exception or CTRL+C saves the weights and prints stuff

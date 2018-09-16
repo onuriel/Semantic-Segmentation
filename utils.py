@@ -10,11 +10,12 @@ import keras.backend as K
 from keras.layers import Lambda, Cropping2D
 from keras.engine import InputSpec, Layer
 SYSTEM_EXCEPT_HOOK = sys.excepthook
-import functools
 import matplotlib.pyplot as plt
 import psutil
 MEGA = 10 ** 6
 MEGA_STR = ' ' * MEGA
+
+
 
 
 class CroppingLike2D(Layer):
@@ -87,6 +88,17 @@ def pixelAccuracy(y_pred, y_true, num_classes):
 
     return 1.0 * np.sum((y_pred==y_true)*(y_true>0)) /  np.sum(y_true>0)
 
+def get_listdir_cache():
+    folder_dict = {}
+    def get_list(folder):
+        if folder not in folder_dict:
+            folder_dict[folder] = sorted(listdir(folder))
+        return folder_dict[folder]
+    return get_list
+
+LIST_DIR_CACHE = get_listdir_cache()
+
+
 def load_data(sample_file, label_file, num_classes):
     data = load_images(sample_file)
     labels = load_images(label_file)
@@ -98,17 +110,58 @@ def load_data(sample_file, label_file, num_classes):
         labels[i] = np.reshape(to_categorical(label[:,:,0], num_classes), (1,height,width,num_classes))
     return data, labels
 
-def load_images(folder, num_of_images=20, cursor=0, selection=None):
+
+class DataGen:
+    def __init__(self, data_folder, label_folder,num_classes=151, preload=10, batch_size=1, cursor=0, shuffle=False, return_with_selection=True):
+        self.data_foler = data_folder
+        self.label_folder = label_folder
+        self.data_folder_dir = sorted(listdir(data_folder))
+        self.label_folder_dir = sorted(listdir(label_folder))
+        self.data_size = len(self.data_folder_dir)
+        self.num_classes = num_classes
+        self.preload = preload
+        self.batch_size= batch_size
+        self.cursor = cursor
+        self.shuffle = shuffle
+        self.return_with_selection= return_with_selection
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        data = [0] * self.preload
+        selection = None
+        while len(data) > 0:
+            print(self.cursor)
+            if self.shuffle:
+                selection = np.random.choice(self.data_size, self.preload)
+            data = load_images(self.data_foler, self.preload, cursor=self.cursor, selection=selection,list_of_files=self.data_folder_dir)
+            labels = load_images(self.label_folder, self.preload, cursor=self.cursor, selection=selection)
+            preprocess_data(data, labels, self.num_classes)
+            for i in range(0, len(labels), self.batch_size):
+                if self.return_with_selection:
+                    yield data[i:i + self.batch_size], labels[i:i + self.batch_size], selection[i:i + self.batch_size]
+                else:
+                    print(selection[i:i + self.batch_size])
+                    yield data[i:i + self.batch_size], labels[i:i + self.batch_size]
+            self.cursor += self.preload
+        return
+
+
+
+
+def load_images(folder, num_of_images=20, cursor=0, selection=None, list_of_files=None):
     dataset = []
-    lists_of_files = sorted(listdir(folder))
+    if list_of_files is None:
+        list_of_files = LIST_DIR_CACHE(folder)
     if selection is not None:
         for i in selection:
-            img = imread(join(folder, lists_of_files[i]))
-            print(lists_of_files[i])
+            img = imread(join(folder, list_of_files[i]))
+            print(list_of_files[i])
             dataset.append(img)
         return dataset
 
-    for _file in lists_of_files[cursor:cursor + num_of_images]:
+    for _file in list_of_files[cursor:cursor + num_of_images]:
         img = imread(folder + "/" + _file)
         print(_file)
         dataset.append(img)
@@ -120,7 +173,7 @@ def load_data_generator(sample_file, label_file, num_classes=151, preload=10, ba
     while len(data) > 0:
         print(cursor)
         if shuffle:
-            selection = np.random.choice(len(listdir(label_file)), preload)
+            selection = np.random.choice(len(LIST_DIR_CACHE(sample_file)), preload)
         data = load_images(sample_file, preload, cursor=cursor, selection=selection)
         labels = load_images(label_file, preload, cursor=cursor, selection=selection)
         preprocess_data(data, labels, num_classes)
@@ -129,7 +182,6 @@ def load_data_generator(sample_file, label_file, num_classes=151, preload=10, ba
                 yield data[i:i+batch_size], labels[i:i+batch_size], selection[i:i+batch_size]
             else:
                 print(selection[i:i+batch_size])
-                print_memory_usage()
                 yield data[i:i+batch_size], labels[i:i+batch_size]
         cursor += preload
     return
@@ -222,6 +274,17 @@ def upsample_layer(bottom, n_channels, name, upscale_factor):
                                         strides=strides, padding='SAME')
 
     return deconv
+
+
+@as_keras_metric
+def mean_iou( y_true, y_pred, num_classes):
+    return tf.metrics.mean_iou(y_true, y_pred, num_classes)
+
+def create_mean_iou(y_true, y_pred, num_classes):
+    def my_mean_iou(y_true, y_pred):
+        return computeIoU(y_pred, y_true, num_classes)
+    return my_mean_iou
+
 
 def plot_images(image, label, prediction):
     label = np.argmax(label, axis=2)

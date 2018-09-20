@@ -2,16 +2,16 @@
 The article can be found: https://www.cv-foundation.org/openaccess/content_cvpr_2015/app/2B_011.pdf"""
 
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+#os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"   # see issue #152
+#os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 # to suppress tensorflow messages
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
-# from keras.backend.tensorflow_backend import set_session
-# config = tf.ConfigProto()
-# config.gpu_options.allow_growth = True
+from keras.backend.tensorflow_backend import set_session
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
 # config.gpu_options.per_process_gpu_memory_fraction = 1
-# set_session(tf.Session(config=config))
+set_session(tf.Session(config=config))
 
 
 
@@ -29,13 +29,13 @@ import numpy as np
 import atexit
 import sys
 
-train_file_path = 'VOCdevkit/VOC2012/ImageSets/Segmentation/train.txt'  # Data/VOClarge/VOC2012/ImageSets/Segmentation
-val_file_path = 'VOCdevkit/VOC2012/ImageSets/Segmentation/val.txt'
-data_dir = 'VOCdevkit/VOC2012/JPEGImages'
-label_dir = 'VOCdevkit/VOC2012/SegmentationClass'
+train_file_path = 'VOC2012/ImageSets/Segmentation/train.txt'  # Data/VOClarge/VOC2012/ImageSets/Segmentation
+val_file_path = 'VOC2012/ImageSets/Segmentation/val.txt'
+data_dir = 'VOC2012/JPEGImages'
+label_dir = 'VOC2012/SegmentationClass'
 classes = 21
-TRAINING_LABEL_FILE = "VOCdevkit/VOC2012/SegmentationClass"
-TRAINING_DATA_FILE = "VOCdevkit/VOC2012/SegmentationData"
+TRAINING_LABEL_FILE = "VOC2012/SegmentationClass"
+TRAINING_DATA_FILE = "VOC2012/SegmentationData"
 # VALIDATION_LABEL_FILE = "ADEChallengeData2016/annotations/validation"
 # VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"

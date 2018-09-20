@@ -5,6 +5,9 @@ from PIL import Image
 import numpy as np
 import os
 
+from keras_preprocessing.image import transform_matrix_offset_center, flip_axis
+from tensorflow.python.keras.preprocessing.image import apply_transform
+
 
 def center_crop(x, center_crop_size, data_format, **kwargs):
     if data_format == 'channels_first':

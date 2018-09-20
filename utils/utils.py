@@ -334,4 +334,4 @@ def plot_images(image, label, prediction):
 
 
 if __name__=='__main__':
-    transfer_only_segmentation_image_files("VOC2012/SegmentationClass","VOC2012/JPEGImages", join('VOC2012', "SegmentationData"))
+    transfer_only_segmentation_image_files("../VOCdevkit/VOC2012/SegmentationClass","../VOCdevkit/VOC2012/JPEGImages", join('../VOCdevkit/VOC2012', "SegmentationData"))

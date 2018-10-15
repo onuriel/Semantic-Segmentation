@@ -15,34 +15,35 @@ set_session(tf.Session(config=config))
 
 
 
-from utils.utils import load_data_generator, new_except_hook, get_bilinear_filter, CroppingLike2D, plot_images
+from utils.utils import load_data_generator, new_except_hook, get_bilinear_filter, CroppingLike2D, plot_images, evaluate_iou
 from utils.metrics import  sparse_accuracy_ignoring_last_label
-from utils.loss_function import softmax_sparse_crossentropy_ignoring_last_label
+from utils.loss_function import softmax_sparse_crossentropy_ignoring_last_label, sparse_cross_entropy
 from utils.SegDataGenerator import SegDataGenerator
 from keras.layers import Conv2D, MaxPool2D, Input, Dropout, Conv2DTranspose, Add, Activation
 from keras.regularizers import l2
-
+from keras.optimizers import SGD
+import pickle
 from os.path import join
 from keras.models import Model, load_model
-from keras.callbacks import CSVLogger
+from keras.callbacks import CSVLogger, ModelCheckpoint
 import numpy as np
 import atexit
 import sys
 
-train_file_path = 'VOC2012/ImageSets/Segmentation/train.txt'  # Data/VOClarge/VOC2012/ImageSets/Segmentation
-val_file_path = 'VOC2012/ImageSets/Segmentation/val.txt'
-data_dir = 'VOC2012/JPEGImages'
-label_dir = 'VOC2012/SegmentationClass'
+train_file_path = 'benchmark_RELEASE/dataset/train.txt'  # Data/VOClarge/VOC2012/ImageSets/Segmentation
+val_file_path = 'benchmark_RELEASE/dataset/seg11valid.txt'
+data_dir = 'benchmark_RELEASE/dataset/img'
+label_dir = 'benchmark_RELEASE/dataset/cls'
 classes = 21
-TRAINING_LABEL_FILE = "VOC2012/SegmentationClass"
-TRAINING_DATA_FILE = "VOC2012/SegmentationData"
+TRAINING_LABEL_FILE = label_dir
+TRAINING_DATA_FILE = data_dir
 # VALIDATION_LABEL_FILE = "ADEChallengeData2016/annotations/validation"
 # VALIDATION_DATA_FILE = "ADEChallengeData2016/images/validation"
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 MODEL_NAME = "fcn_voc"
 WEIGHT_FOLDER = 'weights'
 WEIGHT_FILE = "weights"
-LOAD_WEIGHT_FILE = None
+LOAD_WEIGHT_FILE = "final_weights"
 #LOAD_FILE = WEIGHT_FILE
 LOAD_MODEL_FILE = None
 MODEL_FOLDER = "models"
@@ -73,10 +74,13 @@ class FCN:
         Creates a fully convolutional network with including upsampling.
         :return: the network
         """
-
-        image_input = Input(shape=(None, None, 3))
-        # identity = Activation('linear')(image_input)
-        # self.identity = Model(image_input, output=identity)
+        input_shape = (None, None, 3)
+        if self.batch_size is not None:
+            image_input = Input(batch_shape=(self.batch_size,)+input_shape)
+        else:
+            image_input = Input(shape=input_shape)
+       # identity = Activation('linear')(image_input)
+        #self.identity = Model(image_input, output=identity)
 
         conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu', name="conv1_1", padding='same', kernel_regularizer=l2(self.weight_decay))(image_input)
         conv1_2 = Conv2D(filters=64, kernel_size=3, activation='relu', name="conv1_2", padding='same', kernel_regularizer=l2(self.weight_decay))(conv1_1)
@@ -108,33 +112,35 @@ class FCN:
         drop6 = Dropout(0.5)(fc6)
         fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu', name="fc7", padding='same',kernel_regularizer=l2(self.weight_decay))(drop6)
         drop7 = Dropout(0.5)(fc7)
-        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, use_bias=False, name="fc8", padding='same',kernel_regularizer=l2(self.weight_decay))(drop7)
+        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, name="fc8", padding='same',kernel_regularizer=l2(self.weight_decay))(drop7)
         # self.score_fr = Model(input=image_input, output=score_fr)
         deconv1 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv1",kernel_regularizer=l2(self.weight_decay))(score_fr) #deconv 32
-        # self.deconv1 = Model(input=image_input, output=deconv1)
+       # self.deconv1 = Model(input=image_input, output=deconv1)
         crop_deconv1 = CroppingLike2D(pool_4, num_classes=self.num_labels)(deconv1)
-        # self.crop1 = Model(input=image_input, output=crop_deconv1)
+       # self.crop1 = Model(input=image_input, output=crop_deconv1)
         skip1 = Conv2D(filters=self.num_labels, kernel_size=1, padding='same', activation=None, name='score_pool4',kernel_regularizer=l2(self.weight_decay))(pool_4)
         # self.skip1 = Model(input=image_input, output=skip1)
         add_pool_4 = Add()([skip1, crop_deconv1])
 
         # self.add_pool4 = Model(input=image_input, output=add_pool_4)
         deconv2 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv2",kernel_regularizer=l2(self.weight_decay))(add_pool_4)
-        # self.deconv2 = Model(input=image_input, output=deconv2)
+        #self.deconv2 = Model(input=image_input, output=deconv2)
         crop_deconv2 = CroppingLike2D(pool_3, self.num_labels)(deconv2)
-        # self.crop2 = Model(input=image_input, output=crop_deconv2)
+        #self.crop2 = Model(input=image_input, output=crop_deconv2)
 
         skip2 = Conv2D(filters=self.num_labels, kernel_size=1, activation=None, name="score_pool3", padding="same",kernel_regularizer=l2(self.weight_decay))(pool_3)
         # self.skip2 = Model(input=image_input, output=skip2)
         add_pool_3 = Add()([skip2, crop_deconv2])
 
-        deconv3 = Conv2DTranspose(filters= self.num_labels, kernel_size=16, strides=8, activation=None, name="final",kernel_regularizer=l2(self.weight_decay))(add_pool_3)
+        deconv3 = Conv2DTranspose(filters= self.num_labels,use_bias=False, kernel_size=16, strides=8, activation='linear', name="final",kernel_regularizer=l2(self.weight_decay))(add_pool_3)
         output = CroppingLike2D(image_input, self.num_labels)(deconv3)
         self.model = Model(inputs=image_input, outputs=output)
-
+        optimizer = SGD(lr=10e-4, momentum=0.99, nesterov=True)
         if LOAD_WEIGHT_FILE is None and LOAD_MODEL_FILE is None:
             self.set_keras_weights()
-        self.model.compile(optimizer='adam', loss=softmax_sparse_crossentropy_ignoring_last_label, metrics=[sparse_accuracy_ignoring_last_label])
+
+        target = tf.placeholder(dtype='int32', shape=(None, None, None, None))
+        self.model.compile(optimizer='adam', loss=softmax_sparse_crossentropy_ignoring_last_label, metrics=[sparse_accuracy_ignoring_last_label], target_tensors=[target])
         return output
 
 
@@ -151,15 +157,18 @@ class FCN:
             if layer.name in ['deconv1', "deconv2", "final"]:
                 current_weights = layer.get_weights()
                 bilinear_weights = get_bilinear_filter(current_weights[0].shape, layer.strides[0])
+                if layer.name == 'final':
+                    layer.set_weights([bilinear_weights])
+                    continue
                 layer.set_weights([bilinear_weights, current_weights[1]])
 
 
 
     def train(self, data_file, label_file, test_data_file=None, test_label_file=None):
-        # checkpoint = ModelCheckpoint(join(WEIGHT_FOLDER, "weights.h5"), monitor='val_acc', verbose=1, save_best_only=True, mode='max', save_weights_only=True)
+        checkpoint = ModelCheckpoint(join(WEIGHT_FOLDER, "checkpoint_weights_batch_1.h5"), monitor='val_sparse_accuracy_ignoring_last_label', verbose=1, save_best_only=True, mode='max', save_weights_only=True)
         # checkpoint = LambdaCallback(on_epoch_end= lambda epoch, log: self.save_weights_and_opt_state())
         # csvlogger = CSVLogger('training.log', append=True)
-        # callback_list = [csvlogger]
+        callback_list = [checkpoint]
         current_dir = os.path.dirname(os.path.realpath(__file__))
         save_path = os.path.join(current_dir, MODEL_FOLDER+"/" +MODEL_NAME )
         if os.path.exists(save_path) is False:
@@ -174,20 +183,22 @@ class FCN:
         # from Keras documentation: Total number of steps (batches of samples) to yield from generator before declaring one epoch finished
         # and starting the next epoch. It should typically be equal to the number of unique samples of your dataset divided by the batch size.
         steps_per_epoch = int(np.ceil(get_file_len(train_file_path) / float(self.batch_size)))
-        target_size=(320,320)
-        train_datagen = SegDataGenerator(zoom_range=[0.5, 2.0],
+        target_size=(360,360)
+        train_datagen = SegDataGenerator(
+                                         zoom_range=[0.5, 2.0],
                                          zoom_maintain_shape=True,
                                          crop_mode='random',
                                          crop_size=target_size,
-                                         # pad_size=(505, 505),
+                   #                      pad_size=(505, 505),
                                          rotation_range=0.,
                                          shear_range=0,
                                          horizontal_flip=True,
-                                         channel_shift_range=20.,
+                                         #channel_shift_range=20.,
                                          fill_mode='constant',
-                                         label_cval=255)
+                                         label_cval=255
+                   )
 
-
+        val_datagen = SegDataGenerator()
 
 
         history = self.model.fit_generator(generator=train_datagen.flow_from_directory(
@@ -195,12 +206,27 @@ class FCN:
             data_dir=data_dir, data_suffix=".jpg",
             label_dir=label_dir, label_suffix=".png",
             classes=classes,
-            # target_size=(320,320),
+            target_size=target_size,
             color_mode='rgb',
             batch_size=self.batch_size, shuffle=True,
-            ignore_label=255), epochs=250, steps_per_epoch=steps_per_epoch, verbose=2)
+            ignore_label=255),
+            epochs=20,
+            steps_per_epoch=steps_per_epoch,
+            callbacks=callback_list,
+            verbose=1,
+            validation_data=val_datagen.flow_from_directory(
+                file_path=val_file_path,
+                data_dir=data_dir, data_suffix=".jpg",
+                label_dir=label_dir, label_suffix=".png",
+                classes=classes,
+                target_size=target_size, color_mode='rgb',
+                batch_size=self.batch_size, shuffle=True),
+            validation_steps=40)
+        
+        with open('history_batch_size2', 'wb') as file_pi:
+            pickle.dump(history.history, file_pi)
 
-        print(history)
+        self.save_weights_and_model("final")
 
 
     def save_weights_and_model(self, prefix=None):
@@ -226,30 +252,54 @@ class FCN:
             self.save_network(model_path)
             print("weights saved to : {0}.h5".format(model_path))
 
-    def test_network(self, data_generator, num_of_batches=5):
-        IoU = []
-        if self.model:
-            i = 0
-            while i < num_of_batches:
-                data, label, selection = next(data_generator)
-                i += 1
-                try:
-                    y_pred = self.model.predict(data)
-                except Exception as error:
-                    print(error)
-                    continue
-                IoU += [tf.metrics.mean_iou(label, y_pred, self.num_labels)]
-                # IoU += [computeIoU(y_pred,label, self.num_labels)]
-                print(IoU)
-            mean = np.mean(np.array(IoU))
-            print(mean)
-            return mean
+    def test_network(self, test_path, test_data_dir, test_label_dir):
+        agg_tp, agg_fn, agg_fp = 0, 0, 0
+
+        def get_file_len(file_path):
+            fp = open(file_path)
+            lines = fp.readlines()
+            fp.close()
+            return len(lines)
+
+        size = get_file_len(test_path)
+        datagen = SegDataGenerator()
+        data_iter = datagen.flow_from_directory(file_path=test_path,
+                                                data_dir=test_data_dir, data_suffix='.jpg',
+                                                label_dir=test_label_dir, label_suffix='.png',
+                                                classes=classes, color_mode='rgb', batch_size=1)
+        for index in range(size):
+            data, label = data_iter._get_batches_of_transformed_samples([index])
+            predict = self.model.predict(data)
+            prediction = np.argmax(predict.reshape(predict.shape[1:]), axis=2).astype(np.int)
+            label = label.reshape(label.shape[1:3])
+            tp, fn, fp = evaluate_iou(label, prediction)
+            if tp + fp + fn == 0:
+                iou = 1.
+            else:
+                iou = tp / float(tp + fp + fn)
+            print("Current IoU : {}".format(iou))
+            agg_tp += tp
+            agg_fn += fn
+            agg_fp += fp
+            if agg_tp + agg_fp + agg_fn == 0:
+                iou = 1.
+            else:
+                iou = agg_tp / float(agg_tp + agg_fp + agg_fn)
+
+            print("aggregated IoU : {}".format(iou))
+
+        if agg_tp + agg_fp + agg_fn == 0:
+            iou = 1.
+        else:
+            iou = agg_tp / float(agg_tp + agg_fp + agg_fn)
+
+        print("total IoU : {}".format(iou))
 
 
 
 def main():
 
-    net = FCN(num_labels=NUM_OF_CLASSES, batch_size=1)
+    net = FCN(num_labels=NUM_OF_CLASSES, batch_size=40)
     if LOAD_MODEL_FILE is not None and LOAD_MODEL_FILE != "":
         net.model = load_model(join(MODEL_FOLDER,LOAD_MODEL_FILE), custom_objects={"CroppingLike2D": CroppingLike2D})
         print("loaded existing model")
@@ -264,8 +314,16 @@ def main():
     atexit.register(lambda x: x.on_exit(), net)
     # runs on every uncaught exception
     sys.excepthook = new_except_hook(net)
-
     net.train(TRAINING_DATA_FILE, TRAINING_LABEL_FILE)
+    #data_gen = load_data_generator(TRAINING_DATA_FILE, TRAINING_LABEL_FILE, net.num_labels, shuffle=True, preload=1)
+    net.test_network(val_file_path, data_dir, label_dir)
+    #for image, labels, selection in data_gen:
+    #        pred = net.model.predict(image[0].reshape((1,)+image[0].shape))
+    #        import pdb
+           # pdb.set_trace()
+    #        label = tf.constant(labels[0])
+    #        predict = tf.constant(pred)
+    #        print(softmax_sparse_crossentropy_ignoring_last_label(label, predict).eval(session=tf.Session()))
     # data_gen = load_data_generator(TRAINING_DATA_FILE, TRAINING_LABEL_FILE, net.num_labels, shuffle=True, preload=1, )
     # for image, labels, selection in data_gen:
     #     pred = net.model.predict_on_batch(image)
@@ -274,6 +332,13 @@ def main():
     # net.save_network()
 
     print("finished")
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
     main()

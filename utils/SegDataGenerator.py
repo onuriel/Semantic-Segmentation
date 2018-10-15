@@ -118,7 +118,7 @@ class SegDirectoryIterator(Iterator):
         self.label_dir = label_dir
         self.classes = classes
         self.seg_data_generator = seg_data_generator
-        self.target_size = tuple(target_size)
+        self.target_size = target_size
         self.ignore_label = ignore_label
         self.crop_mode = crop_mode
         self.label_cval = label_cval
@@ -221,6 +221,10 @@ class SegDirectoryIterator(Iterator):
                 label = Image.open(label_filepath)
                 if self.save_to_dir and self.palette is None:
                     self.palette = label.palette
+
+            x = img_to_array(img, data_format=self.data_format)
+            y = img_to_array(label, data_format=self.data_format).astype(int)
+
 
             # do padding
             if self.target_size:

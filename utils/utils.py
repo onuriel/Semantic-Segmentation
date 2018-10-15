@@ -38,7 +38,8 @@ class CroppingLike2D(Layer):
                 input_shape[3])
     def call(self, inputs, **kwargs):
         orig_shape = K.shape(self.target)
-        input_image = inputs[0]
+        input_image = inputs
+        
         return tf.image.crop_to_bounding_box(input_image, 0, 0, orig_shape[1], orig_shape[2])
                                                                                                                         
 
@@ -198,7 +199,7 @@ def load_data_generator(sample_file, label_file, num_classes=151, preload=10, ba
             selection = np.random.choice(len(LIST_DIR_CACHE(sample_file)), preload)
         data = load_images(sample_file, preload, cursor=cursor, selection=selection)
         labels = load_images(label_file, preload, cursor=cursor, selection=selection)
-        preprocess_data(data, labels, num_classes)
+        #preprocess_data(data, labels, num_classes)
         for i in range(0,len(labels),batch_size):
             if return_with_selection:
                 yield data[i:i+batch_size], labels[i:i+batch_size], selection[i:i+batch_size]
@@ -316,6 +317,22 @@ def create_mean_iou(y_true, y_pred, num_classes):
         return computeIoU(y_pred, y_true, num_classes)
     return my_mean_iou
 
+
+def evaluate_iou(gt_labels, pred_labels):
+
+    correct_predictions = gt_labels == pred_labels
+    positive_predictions = pred_labels != 0
+
+    # correct, positive prediction -> True positive
+    tp = np.sum(correct_predictions & positive_predictions)
+
+    # incorrect, negative prediction (using De Morgan's law) -> False negative
+    fn = np.sum(np.logical_not(correct_predictions | positive_predictions))
+
+    # incorrect, positive prediction -> False positive
+    fp = np.sum(np.logical_not(correct_predictions) & positive_predictions)
+
+    return tp, fn, fp
 
 def plot_images(image, label, prediction):
     label = np.argmax(label, axis=2)

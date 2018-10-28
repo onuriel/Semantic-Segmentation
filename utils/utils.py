@@ -307,6 +307,15 @@ def transfer_only_segmentation_image_files(label_folder, data_folder, new_folder
         shutil.copy2(data_file, new_folder_name)
 
 
+def complete_seg11valid_set(source_folder, destination_folder, valid_txt_file, suffix):
+    with open(valid_txt_file, 'r') as valid_file:
+        list_of_files = set(valid_file.read().splitlines())
+        dest_files = listdir(destination_folder)
+        src_files = listdir(source_folder)
+        for filename in list_of_files:
+            if filename+suffix not in dest_files and filename+suffix in src_files:
+                shutil.copy2(join(source_folder, filename+suffix), destination_folder)
+
 
 @as_keras_metric
 def mean_iou( y_true, y_pred, num_classes):
@@ -351,4 +360,6 @@ def plot_images(image, label, prediction):
 
 
 if __name__=='__main__':
-    transfer_only_segmentation_image_files("../VOCdevkit/VOC2012/SegmentationClass","../VOCdevkit/VOC2012/JPEGImages", join('../VOCdevkit/VOC2012', "SegmentationData"))
+    complete_seg11valid_set("VOCdevkit/VOC2012/JPEGImages",'benchmark_RELEASE/dataset/img/','benchmark_RELEASE/dataset/seg11valid.txt', '.jpg')
+    complete_seg11valid_set("VOCdevkit/VOC2012/SegmentationClass",'benchmark_RELEASE/dataset/cls/','benchmark_RELEASE/dataset/seg11valid.txt', '.png')
+    #transfer_only_segmentation_image_files("../VOCdevkit/VOC2012/SegmentationClass","../VOCdevkit/VOC2012/JPEGImages", join('../VOCdevkit/VOC2012', "SegmentationData"))

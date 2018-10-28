@@ -5,8 +5,8 @@ from PIL import Image
 import numpy as np
 import os
 
-from keras_preprocessing.image import transform_matrix_offset_center, flip_axis
-from tensorflow.python.keras.preprocessing.image import apply_transform
+from keras_preprocessing.image import transform_matrix_offset_center, flip_axis, apply_affine_transform
+#from tensorflow.python.keras.preprocessing.image import apply_transform
 
 
 def center_crop(x, center_crop_size, data_format, **kwargs):
@@ -108,7 +108,7 @@ class SegDirectoryIterator(Iterator):
                  data_format='default', class_mode='sparse',
                  batch_size=1, shuffle=True, seed=None,
                  save_to_dir=None, save_prefix='', save_format='jpeg',
-                 loss_shape=None):
+                 loss_shape=None, mean=None):
         if data_format == 'default':
             data_format = K.image_data_format()
         self.file_path = file_path
@@ -123,6 +123,7 @@ class SegDirectoryIterator(Iterator):
         self.crop_mode = crop_mode
         self.label_cval = label_cval
         self.pad_size = pad_size
+        self.mean = mean
         if color_mode not in {'rgb', 'grayscale'}:
             raise ValueError('Invalid color mode:', color_mode,
                              '; expected "rgb" or "grayscale".')
@@ -224,7 +225,8 @@ class SegDirectoryIterator(Iterator):
 
             x = img_to_array(img, data_format=self.data_format)
             y = img_to_array(label, data_format=self.data_format).astype(int)
-
+            if self.mean is not None:
+                x -= self.mean
 
             # do padding
             if self.target_size:
@@ -323,11 +325,11 @@ class SegDataGenerator(object):
                  horizontal_flip=False,
                  vertical_flip=False,
                  rescale=None,
-                 data_format='default'):
+                 data_format='default', mean=None):
         if data_format == 'default':
             data_format = K.image_data_format()
         self.__dict__.update(locals())
-        self.mean = None
+        self.mean = mean
         self.ch_mean = None
         self.std = None
         self.principal_components = None
@@ -381,7 +383,7 @@ class SegDataGenerator(object):
             batch_size=batch_size, shuffle=shuffle, seed=seed,
             save_to_dir=save_to_dir, save_prefix=save_prefix,
             save_format=save_format,
-            loss_shape=loss_shape)
+            loss_shape=loss_shape, mean=self.mean)
 
     def standardize(self, x):
         if self.rescale:
@@ -468,10 +470,15 @@ class SegDataGenerator(object):
         transform_matrix = transform_matrix_offset_center(
             transform_matrix, h, w)
 
-        x = apply_transform(x, transform_matrix, img_channel_index,
-                            fill_mode=self.fill_mode, cval=self.cval)
-        y = apply_transform(y, transform_matrix, img_channel_index,
-                            fill_mode='constant', cval=self.label_cval)
+
+        params = {'theta': theta, 'tx': tx, 'ty': ty, 'zx': zx, 'zy': zy, 'shear': shear, 'channel_axis' : img_channel_index}
+        x = apply_affine_transform(x, cval=self.cval, fill_mode=self.fill_mode, **params)
+        y = apply_affine_transform(y, cval=self.label_cval, fill_mode='constant', **params)
+
+       # x = apply_transform(x, transform_matrix, img_channel_index,
+       #                     fill_mode=self.fill_mode, cval=self.cval)
+       # y = apply_transform(y, transform_matrix, img_channel_index,
+       #                     fill_mode='constant', cval=self.label_cval)
 
         if self.channel_shift_range != 0:
             x = random_channel_shift(

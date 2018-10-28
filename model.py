@@ -16,10 +16,10 @@ set_session(tf.Session(config=config))
 
 
 from utils.utils import load_data_generator, new_except_hook, get_bilinear_filter, CroppingLike2D, plot_images, evaluate_iou
-from utils.metrics import  sparse_accuracy_ignoring_last_label
+from utils.metrics import  sparse_accuracy_ignoring_last_label, Mean_IOU
 from utils.loss_function import softmax_sparse_crossentropy_ignoring_last_label, sparse_cross_entropy
 from utils.SegDataGenerator import SegDataGenerator
-from keras.layers import Conv2D, MaxPool2D, Input, Dropout, Conv2DTranspose, Add, Activation
+from keras.layers import Conv2D, MaxPool2D, Input, Dropout, Conv2DTranspose, Add, Activation, ZeroPadding2D
 from keras.regularizers import l2
 from keras.optimizers import SGD
 import pickle
@@ -43,15 +43,15 @@ PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
 MODEL_NAME = "fcn_voc"
 WEIGHT_FOLDER = 'weights'
 WEIGHT_FILE = "weights"
-LOAD_WEIGHT_FILE = "final_weights"
+LOAD_WEIGHT_FILE = None
 #LOAD_FILE = WEIGHT_FILE
 LOAD_MODEL_FILE = None
 MODEL_FOLDER = "models"
 OPTOMIZER_FILE = 'optimizer.pkl'
 
 NUM_OF_CLASSES = 21
-
-
+MEAN = (104.00699, 116.66877, 122.67892)
+#MEAN = None
 
 class FCN:
 
@@ -81,13 +81,13 @@ class FCN:
             image_input = Input(shape=input_shape)
        # identity = Activation('linear')(image_input)
         #self.identity = Model(image_input, output=identity)
-
+        image_input = ZeroPadding2D(100)(image_input)
         conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu', name="conv1_1", padding='same', kernel_regularizer=l2(self.weight_decay))(image_input)
         conv1_2 = Conv2D(filters=64, kernel_size=3, activation='relu', name="conv1_2", padding='same', kernel_regularizer=l2(self.weight_decay))(conv1_1)
         pool_1 = MaxPool2D(strides=2)(conv1_2)
 
         conv2_1 = Conv2D(filters=128, kernel_size=3, activation='relu', name="conv2_1", padding='same', kernel_regularizer=l2(self.weight_decay))(pool_1)
-        conv2_2 = Conv2D(filters=128, kernel_size=3, activation='relu', name="conv2_2", padding='same')(conv2_1)
+        conv2_2 = Conv2D(filters=128, kernel_size=3, activation='relu', name="conv2_2", padding='same', kernel_regularizer=l2(self.weight_decay))(conv2_1)
         pool_2 = MaxPool2D(strides=2)(conv2_2)
 
         conv3_1 = Conv2D(filters=256, kernel_size=3, activation='relu', name="conv3_1", padding='same', kernel_regularizer=l2(self.weight_decay))(pool_2)
@@ -108,9 +108,9 @@ class FCN:
         pool_5 = MaxPool2D(strides=2)(conv5_3)
 
         #fully conv
-        fc6 = Conv2D(filters=4096, kernel_size=7, activation='relu', name="fc6", padding='same',kernel_regularizer=l2(self.weight_decay))(pool_5)
+        fc6 = Conv2D(filters=4096, kernel_size=7, activation='relu', name="fc6", padding='valid',kernel_regularizer=l2(self.weight_decay))(pool_5)
         drop6 = Dropout(0.5)(fc6)
-        fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu', name="fc7", padding='same',kernel_regularizer=l2(self.weight_decay))(drop6)
+        fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu', name="fc7", padding='valid',kernel_regularizer=l2(self.weight_decay))(drop6)
         drop7 = Dropout(0.5)(fc7)
         score_fr = Conv2D(filters=self.num_labels, kernel_size=1, name="fc8", padding='same',kernel_regularizer=l2(self.weight_decay))(drop7)
         # self.score_fr = Model(input=image_input, output=score_fr)
@@ -183,7 +183,8 @@ class FCN:
         # from Keras documentation: Total number of steps (batches of samples) to yield from generator before declaring one epoch finished
         # and starting the next epoch. It should typically be equal to the number of unique samples of your dataset divided by the batch size.
         steps_per_epoch = int(np.ceil(get_file_len(train_file_path) / float(self.batch_size)))
-        target_size=(360,360)
+        target_size=(420,420)
+        mean = MEAN
         train_datagen = SegDataGenerator(
                                          zoom_range=[0.5, 2.0],
                                          zoom_maintain_shape=True,
@@ -195,10 +196,10 @@ class FCN:
                                          horizontal_flip=True,
                                          #channel_shift_range=20.,
                                          fill_mode='constant',
-                                         label_cval=255
-                   )
+                                         label_cval=255,
+                                         mean=mean)
 
-        val_datagen = SegDataGenerator()
+        val_datagen = SegDataGenerator(mean=mean)
 
 
         history = self.model.fit_generator(generator=train_datagen.flow_from_directory(
@@ -262,7 +263,7 @@ class FCN:
             return len(lines)
 
         size = get_file_len(test_path)
-        datagen = SegDataGenerator()
+        datagen = SegDataGenerator(mean=MEAN)
         data_iter = datagen.flow_from_directory(file_path=test_path,
                                                 data_dir=test_data_dir, data_suffix='.jpg',
                                                 label_dir=test_label_dir, label_suffix='.png',
@@ -299,7 +300,7 @@ class FCN:
 
 def main():
 
-    net = FCN(num_labels=NUM_OF_CLASSES, batch_size=40)
+    net = FCN(num_labels=NUM_OF_CLASSES, batch_size=20)
     if LOAD_MODEL_FILE is not None and LOAD_MODEL_FILE != "":
         net.model = load_model(join(MODEL_FOLDER,LOAD_MODEL_FILE), custom_objects={"CroppingLike2D": CroppingLike2D})
         print("loaded existing model")

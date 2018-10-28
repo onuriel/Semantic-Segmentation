@@ -77,12 +77,13 @@ class FCN:
         input_shape = (None, None, 3)
         if self.batch_size is not None:
             image_input = Input(batch_shape=(self.batch_size,)+input_shape)
+            padding = ZeroPadding2D(100,  input_shape=(self.batch_size,)+ input_shape)(image_input)
         else:
             image_input = Input(shape=input_shape)
+            padding = ZeroPadding2D(100, input_shape=input_shape)(image_input)
        # identity = Activation('linear')(image_input)
         #self.identity = Model(image_input, output=identity)
-        image_input = ZeroPadding2D(100)(image_input)
-        conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu', name="conv1_1", padding='same', kernel_regularizer=l2(self.weight_decay))(image_input)
+        conv1_1 = Conv2D(kernel_size=3, filters=64, activation='relu', name="conv1_1", padding='same', kernel_regularizer=l2(self.weight_decay))(padding)
         conv1_2 = Conv2D(filters=64, kernel_size=3, activation='relu', name="conv1_2", padding='same', kernel_regularizer=l2(self.weight_decay))(conv1_1)
         pool_1 = MaxPool2D(strides=2)(conv1_2)
 
@@ -94,13 +95,13 @@ class FCN:
         conv3_2 = Conv2D(filters=256, kernel_size=3, activation='relu', name="conv3_2", padding='same',kernel_regularizer=l2(self.weight_decay))(conv3_1)
         conv3_3 = Conv2D(filters=256, kernel_size=3, activation='relu', name="conv3_3", padding='same',kernel_regularizer=l2(self.weight_decay))(conv3_2)
         pool_3 = MaxPool2D(strides=2)(conv3_3)
-        # self.pool3 = Model(input=image_input, output=pool_3)
+        #self.pool3 = Model(input=image_input, output=pool_3)
 
         conv4_1 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv4_1", padding='same',kernel_regularizer=l2(self.weight_decay))(pool_3)
         conv4_2 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv4_2", padding='same',kernel_regularizer=l2(self.weight_decay))(conv4_1)
         conv4_3 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv4_3", padding='same',kernel_regularizer=l2(self.weight_decay))(conv4_2)
         pool_4 = MaxPool2D(strides=2)(conv4_3)
-        # self.pool4 = Model(input=image_input, output=pool_4)
+        #self.pool4 = Model(input=image_input, output=pool_4)
 
         conv5_1 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv5_1", padding='same',kernel_regularizer=l2(self.weight_decay))(pool_4)
         conv5_2 = Conv2D(filters=512, kernel_size=3, activation='relu', name="conv5_2", padding='same',kernel_regularizer=l2(self.weight_decay))(conv5_1)
@@ -113,27 +114,27 @@ class FCN:
         fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu', name="fc7", padding='valid',kernel_regularizer=l2(self.weight_decay))(drop6)
         drop7 = Dropout(0.5)(fc7)
         score_fr = Conv2D(filters=self.num_labels, kernel_size=1, name="fc8", padding='same',kernel_regularizer=l2(self.weight_decay))(drop7)
-        # self.score_fr = Model(input=image_input, output=score_fr)
+        #self.score_fr = Model(input=image_input, output=score_fr)
         deconv1 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv1",kernel_regularizer=l2(self.weight_decay))(score_fr) #deconv 32
-       # self.deconv1 = Model(input=image_input, output=deconv1)
-        crop_deconv1 = CroppingLike2D(pool_4, num_classes=self.num_labels)(deconv1)
-       # self.crop1 = Model(input=image_input, output=crop_deconv1)
-        skip1 = Conv2D(filters=self.num_labels, kernel_size=1, padding='same', activation=None, name='score_pool4',kernel_regularizer=l2(self.weight_decay))(pool_4)
+        #self.deconv1 = Model(input=image_input, output=deconv1)
+        crop_pool4 = CroppingLike2D(deconv1, num_classes=self.num_labels, offset=6)(pool_4)
+        #self.crop1 = Model(input=image_input, output=crop_pool4)
+        skip1 = Conv2D(filters=self.num_labels, kernel_size=1, padding='same', activation=None, name='score_pool4',kernel_regularizer=l2(self.weight_decay))(crop_pool4)
         # self.skip1 = Model(input=image_input, output=skip1)
-        add_pool_4 = Add()([skip1, crop_deconv1])
+        add_pool_4 = Add()([skip1, deconv1])
 
         # self.add_pool4 = Model(input=image_input, output=add_pool_4)
         deconv2 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv2",kernel_regularizer=l2(self.weight_decay))(add_pool_4)
         #self.deconv2 = Model(input=image_input, output=deconv2)
-        crop_deconv2 = CroppingLike2D(pool_3, self.num_labels)(deconv2)
-        #self.crop2 = Model(input=image_input, output=crop_deconv2)
+        crop_pool3 = CroppingLike2D(deconv2, self.num_labels, offset=8)(pool_3)
+        #self.crop2 = Model(input=image_input, output=crop_pool3)
 
-        skip2 = Conv2D(filters=self.num_labels, kernel_size=1, activation=None, name="score_pool3", padding="same",kernel_regularizer=l2(self.weight_decay))(pool_3)
+        skip2 = Conv2D(filters=self.num_labels, kernel_size=1, activation=None, name="score_pool3", padding="same",kernel_regularizer=l2(self.weight_decay))(crop_pool3)
         # self.skip2 = Model(input=image_input, output=skip2)
-        add_pool_3 = Add()([skip2, crop_deconv2])
+        add_pool_3 = Add()([skip2, deconv2])
 
         deconv3 = Conv2DTranspose(filters= self.num_labels,use_bias=False, kernel_size=16, strides=8, activation='linear', name="final",kernel_regularizer=l2(self.weight_decay))(add_pool_3)
-        output = CroppingLike2D(image_input, self.num_labels)(deconv3)
+        output = CroppingLike2D(image_input, self.num_labels, offset=12)(deconv3)
         self.model = Model(inputs=image_input, outputs=output)
         optimizer = SGD(lr=10e-4, momentum=0.99, nesterov=True)
         if LOAD_WEIGHT_FILE is None and LOAD_MODEL_FILE is None:
@@ -183,7 +184,7 @@ class FCN:
         # from Keras documentation: Total number of steps (batches of samples) to yield from generator before declaring one epoch finished
         # and starting the next epoch. It should typically be equal to the number of unique samples of your dataset divided by the batch size.
         steps_per_epoch = int(np.ceil(get_file_len(train_file_path) / float(self.batch_size)))
-        target_size=(420,420)
+        target_size=(320,320)
         mean = MEAN
         train_datagen = SegDataGenerator(
                                          zoom_range=[0.5, 2.0],
@@ -270,7 +271,14 @@ class FCN:
                                                 classes=classes, color_mode='rgb', batch_size=1)
         for index in range(size):
             data, label = data_iter._get_batches_of_transformed_samples([index])
-            predict = self.model.predict(data)
+            #import pdb
+            #pdb.set_trace()
+            #pool4 = self.pool4.predict(data)
+            #deconv1 = self.deconv1.predict(data)
+            #score_fr = self.score_fr.predict(data)
+            #crop1 = self.crop1.predict(data)
+            #crop2 = self.crop2.predict(data)
+            #predict = self.model.predict(data)
             prediction = np.argmax(predict.reshape(predict.shape[1:]), axis=2).astype(np.int)
             label = label.reshape(label.shape[1:3])
             tp, fn, fp = evaluate_iou(label, prediction)

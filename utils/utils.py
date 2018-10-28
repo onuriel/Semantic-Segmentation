@@ -21,7 +21,7 @@ MEGA_STR = ' ' * MEGA
 
 
 class CroppingLike2D(Layer):
-    def __init__(self, target=None, num_classes=151, **kwargs):
+    def __init__(self, target=None, num_classes=151,offset=0, **kwargs):
         """Crop to target.
         If only one `offset` is set, then all dimensions are offset by this amount.
         """
@@ -30,6 +30,7 @@ class CroppingLike2D(Layer):
         self.target_shape = (None, None, None, num_classes)
         self.target = K.zeros(shape=(1,1,1,1))  if target is None else target
         self.input_spec = InputSpec(ndim=4)
+        self.offset = offset
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0],
@@ -40,7 +41,7 @@ class CroppingLike2D(Layer):
         orig_shape = K.shape(self.target)
         input_image = inputs
         
-        return tf.image.crop_to_bounding_box(input_image, 0, 0, orig_shape[1], orig_shape[2])
+        return tf.image.crop_to_bounding_box(input_image, self.offset,self.offset, orig_shape[1], orig_shape[2])
                                                                                                                         
 
 def crop2d(orig_image):

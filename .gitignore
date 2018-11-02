@@ -110,3 +110,4 @@ ADEChallengeData2016.zip
 VOCtrainval_11-May-2012.tar
 weights/
 vgg16.npy
+benchmark_RELEASE/

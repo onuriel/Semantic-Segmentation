@@ -195,7 +195,7 @@ class FCN:
                                          rotation_range=0.,
                                          shear_range=0,
                                          horizontal_flip=True,
-                                         #channel_shift_range=20.,
+                                         # channel_shift_range=20.,
                                          fill_mode='constant',
                                          label_cval=255,
                                          mean=mean)
@@ -212,7 +212,7 @@ class FCN:
             color_mode='rgb',
             batch_size=self.batch_size, shuffle=True,
             ignore_label=255),
-            epochs=20,
+            epochs=50,
             steps_per_epoch=steps_per_epoch,
             callbacks=callback_list,
             verbose=1,
@@ -225,7 +225,7 @@ class FCN:
                 batch_size=self.batch_size, shuffle=True),
             validation_steps=40)
         
-        with open('history_batch_size2', 'wb') as file_pi:
+        with open('history_batch_size1', 'wb') as file_pi:
             pickle.dump(history.history, file_pi)
 
         self.save_weights_and_model("final")
@@ -278,7 +278,7 @@ class FCN:
             #score_fr = self.score_fr.predict(data)
             #crop1 = self.crop1.predict(data)
             #crop2 = self.crop2.predict(data)
-            #predict = self.model.predict(data)
+            predict = self.model.predict(data)
             prediction = np.argmax(predict.reshape(predict.shape[1:]), axis=2).astype(np.int)
             label = label.reshape(label.shape[1:3])
             tp, fn, fp = evaluate_iou(label, prediction)

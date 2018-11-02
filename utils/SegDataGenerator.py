@@ -4,12 +4,17 @@ from keras import backend as K
 from PIL import Image
 import numpy as np
 import os
-
 from keras_preprocessing.image import transform_matrix_offset_center, flip_axis, apply_affine_transform
-#from tensorflow.python.keras.preprocessing.image import apply_transform
 
 
-def center_crop(x, center_crop_size, data_format, **kwargs):
+def center_crop(x, center_crop_size, data_format):
+    """
+
+    :param x: The image
+    :param center_crop_size: How many pixels to keep.
+    :param data_format: Implies if to crop using first or last chanel.
+    :return: The cropped image
+    """
     if data_format == 'channels_first':
         centerh, centerw = x.shape[1] // 2, x.shape[2] // 2
     elif data_format == 'channels_last':
@@ -25,7 +30,15 @@ def center_crop(x, center_crop_size, data_format, **kwargs):
         return x[h_start:h_end, w_start:w_end, :]
 
 
-def pair_center_crop(x, y, center_crop_size, data_format, **kwargs):
+def pair_center_crop(x, y, center_crop_size, data_format):
+    """
+    This function crops two images
+    :param x: The first image
+    :param y: The second image.
+    :param center_crop_size: How many pixels to keep.
+    :param data_format: Implies if to crop using first or last chanel.
+    :return: Both images cropped.
+    """
     if data_format == 'channels_first':
         centerh, centerw = x.shape[1] // 2, x.shape[2] // 2
     elif data_format == 'channels_last':
@@ -43,7 +56,15 @@ def pair_center_crop(x, y, center_crop_size, data_format, **kwargs):
                y[h_start:h_end, w_start:w_end, :]
 
 
-def random_crop(x, random_crop_size, data_format, sync_seed=None, **kwargs):
+def random_crop(x, random_crop_size, data_format, sync_seed=None):
+    """
+    This function crops the image randomly.
+    :param x: The image to crop.
+    :param random_crop_size: The size of the patch.
+    :param data_format: Implies if to crop using first or last chanel.
+    :param sync_seed: seed for the random function.
+    :return: a patch from the image.
+    """
     np.random.seed(sync_seed)
     if data_format == 'channels_first':
         h, w = x.shape[1], x.shape[2]
@@ -62,7 +83,20 @@ def random_crop(x, random_crop_size, data_format, sync_seed=None, **kwargs):
         return x[h_start:h_end, w_start:w_end, :]
 
 
-def pair_random_crop(x, y, random_crop_size, data_format, sync_seed=None, **kwargs):
+def pair_random_crop(x, y, random_crop_size, data_format, sync_seed=None):
+    """
+    crops 2 images randomly.
+    :param random_crop_size:
+    :param data_format:
+    :param sync_seed:
+    :return: a patch from the image.
+    :param x: The first image to crop.
+    :param y: The second image to crop
+    :param random_crop_size: The size of the patch.
+    :param data_format: Implies if to crop using first or last chanel.
+    :param sync_seed: seed for the random function.
+    :return: Both images cropped randomly.
+    """
     np.random.seed(sync_seed)
     if data_format == 'channels_first':
         h, w = x.shape[1], x.shape[2]
@@ -82,7 +116,7 @@ def pair_random_crop(x, y, random_crop_size, data_format, sync_seed=None, **kwar
 
 
 class SegDirectoryIterator(Iterator):
-    '''
+    """
     Users need to ensure that all files exist.
     Label images should be png images where pixel values represents class number.
 
@@ -98,7 +132,7 @@ class SegDirectoryIterator(Iterator):
     data_suffix: image file extension, such as `.jpg` or `.png`
     label_suffix: label file suffix, such as `.png`, or `.npy`
     loss_shape: shape to use when applying loss function to the label data
-    '''
+    """
 
     def __init__(self, file_path, seg_data_generator,
                  data_dir, data_suffix,
@@ -108,7 +142,7 @@ class SegDirectoryIterator(Iterator):
                  data_format='default', class_mode='sparse',
                  batch_size=1, shuffle=True, seed=None,
                  save_to_dir=None, save_prefix='', save_format='jpeg',
-                 loss_shape=None, mean=None):
+                 loss_shape=None, mean=None, preprocess_input=False):
         if data_format == 'default':
             data_format = K.image_data_format()
         self.file_path = file_path
@@ -124,6 +158,7 @@ class SegDirectoryIterator(Iterator):
         self.label_cval = label_cval
         self.pad_size = pad_size
         self.mean = mean
+        self.preprocess_input = preprocess_input
         if color_mode not in {'rgb', 'grayscale'}:
             raise ValueError('Invalid color mode:', color_mode,
                              '; expected "rgb" or "grayscale".')
@@ -294,7 +329,8 @@ class SegDirectoryIterator(Iterator):
                 label.save(os.path.join(self.save_to_dir,
                                         'label_' + fname + '.png'))
         # return
-        batch_x = preprocess_input(batch_x)
+        if self.preprocess_input:
+            batch_x = preprocess_input(batch_x)
         if self.class_mode == 'sparse':
             return batch_x, batch_y
         else:
@@ -325,7 +361,7 @@ class SegDataGenerator(object):
                  horizontal_flip=False,
                  vertical_flip=False,
                  rescale=None,
-                 data_format='default', mean=None):
+                 data_format='default', mean=None, preprocess_input=None):
         if data_format == 'default':
             data_format = K.image_data_format()
         self.__dict__.update(locals())
@@ -334,6 +370,7 @@ class SegDataGenerator(object):
         self.std = None
         self.principal_components = None
         self.rescale = rescale
+        self.preprocess_input = preprocess_input
 
         if data_format not in {'channels_last', 'channels_first'}:
             raise Exception('data_format should be channels_last (channel after row and '
@@ -383,7 +420,7 @@ class SegDataGenerator(object):
             batch_size=batch_size, shuffle=shuffle, seed=seed,
             save_to_dir=save_to_dir, save_prefix=save_prefix,
             save_format=save_format,
-            loss_shape=loss_shape, mean=self.mean)
+            loss_shape=loss_shape, mean=self.mean, preprocess_input=self.preprocess_input)
 
     def standardize(self, x):
         if self.rescale:
@@ -474,11 +511,6 @@ class SegDataGenerator(object):
         params = {'theta': theta, 'tx': tx, 'ty': ty, 'zx': zx, 'zy': zy, 'shear': shear, 'channel_axis' : img_channel_index}
         x = apply_affine_transform(x, cval=self.cval, fill_mode=self.fill_mode, **params)
         y = apply_affine_transform(y, cval=self.label_cval, fill_mode='constant', **params)
-
-       # x = apply_transform(x, transform_matrix, img_channel_index,
-       #                     fill_mode=self.fill_mode, cval=self.cval)
-       # y = apply_transform(y, transform_matrix, img_channel_index,
-       #                     fill_mode='constant', cval=self.label_cval)
 
         if self.channel_shift_range != 0:
             x = random_channel_shift(

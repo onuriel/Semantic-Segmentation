@@ -156,7 +156,7 @@ def evaluate_iou(gt_labels, pred_labels):
     return tp, fn, fp
 
 
-def plot_images(image, label, prediction):
+def display_results(image, label, prediction):
     """
     Plot original image, prediction image and true label.
     :param image: The original image.
@@ -164,7 +164,13 @@ def plot_images(image, label, prediction):
     :param prediction: The networks prediction.
     """
 
-    print(np.mean(prediction == label))
+    print("Accuracy : ", np.mean(prediction == label))
+    tp, fn, fp = evaluate_iou(label, prediction)
+    if tp + fp + fn == 0:
+        iou = 1.
+    else:
+        iou = tp / float(tp + fp + fn)
+    print("IOU : ", iou )
     plt.subplot(1,3,1)
     plt.title("Image")
     plt.imshow(image)

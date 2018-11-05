@@ -10,7 +10,7 @@ config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 set_session(tf.Session(config=config))
 from keras.applications.imagenet_utils import preprocess_input
-from utils.utils import  new_except_hook, get_bilinear_filter, CroppingLike2D, plot_images, evaluate_iou
+from utils.utils import  new_except_hook, get_bilinear_filter, CroppingLike2D, display_results, evaluate_iou
 from utils.metrics import sparse_accuracy_ignoring_last_label
 from utils.loss_function import softmax_sparse_crossentropy_ignoring_last_label
 from utils.SegDataGenerator import SegDataGenerator
@@ -38,14 +38,12 @@ TRAINING_LABEL_FILE = label_dir
 TRAINING_DATA_FILE = data_dir
 
 PRETRAINED_WEIGHTS_FILE = "vgg16.npy"
-MODEL_NAME = "fcn_voc"
 WEIGHT_FOLDER = 'weights'
 WEIGHT_FILE = "weights"
-LOAD_WEIGHT_FILE = None
+LOAD_WEIGHT_FILE = "final_weights"
 #LOAD_FILE = WEIGHT_FILE
 LOAD_MODEL_FILE = None
 MODEL_FOLDER = "models"
-OPTOMIZER_FILE = 'optimizer.pkl'
 
 
 
@@ -104,20 +102,20 @@ class FCN:
         drop6 = Dropout(0.5)(fc6)
         fc7 = Conv2D(filters=4096, kernel_size=1, activation='relu', name="fc7", padding='valid',kernel_regularizer=l2(self.weight_decay))(drop6)
         drop7 = Dropout(0.5)(fc7)
-        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, name="fc8", padding='same',kernel_regularizer=l2(self.weight_decay))(drop7)
+        score_fr = Conv2D(filters=self.num_labels, kernel_size=1, name="score_fr", padding='same',kernel_regularizer=l2(self.weight_decay))(drop7)
 
         # up sampling
-        deconv1 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv1",kernel_regularizer=l2(self.weight_decay))(score_fr)
+        deconv1 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="score2",kernel_regularizer=l2(self.weight_decay))(score_fr)
         crop_pool4 = CroppingLike2D(deconv1, num_classes=self.num_labels, offset=6)(pool_4)
         skip1 = Conv2D(filters=self.num_labels, kernel_size=1, padding='same', activation=None, name='score_pool4',kernel_regularizer=l2(self.weight_decay))(crop_pool4)
         add_pool_4 = Add()([skip1, deconv1])
 
-        deconv2 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="deconv2",kernel_regularizer=l2(self.weight_decay))(add_pool_4)
+        deconv2 = Conv2DTranspose(filters=self.num_labels, kernel_size=4, strides=2, activation=None, name="score4",kernel_regularizer=l2(self.weight_decay))(add_pool_4)
         crop_pool3 = CroppingLike2D(deconv2, self.num_labels, offset=8)(pool_3)
         skip2 = Conv2D(filters=self.num_labels, kernel_size=1, activation=None, name="score_pool3", padding="same",kernel_regularizer=l2(self.weight_decay))(crop_pool3)
         add_pool_3 = Add()([skip2, deconv2])
 
-        deconv3 = Conv2DTranspose(filters= self.num_labels,use_bias=False, kernel_size=16, strides=8, activation='linear', name="final",kernel_regularizer=l2(self.weight_decay))(add_pool_3)
+        deconv3 = Conv2DTranspose(filters= self.num_labels,use_bias=False, kernel_size=16, strides=8, activation='linear', name="upsample",kernel_regularizer=l2(self.weight_decay))(add_pool_3)
         output = CroppingLike2D(image_input, self.num_labels, offset=12)(deconv3)
         self.model = Model(inputs=image_input, outputs=output)
 
@@ -154,12 +152,18 @@ class FCN:
         """
         This function trains the network.
         """
-        checkpoint = ModelCheckpoint(join(WEIGHT_FOLDER, "checkpoint_weights_batch_1.h5"), monitor='val_sparse_accuracy_ignoring_last_label', verbose=1, save_best_only=True, mode='max', save_weights_only=True)
+        checkpoint = ModelCheckpoint(join(WEIGHT_FOLDER, "checkpoint_weights.h5"), monitor='val_sparse_accuracy_ignoring_last_label', verbose=1, save_best_only=True, mode='max', save_weights_only=True)
         callback_list = [checkpoint]
         current_dir = os.path.dirname(os.path.realpath(__file__))
-        save_path = os.path.join(current_dir, MODEL_FOLDER+"/" + MODEL_NAME)
-        if os.path.exists(save_path) is False:
-            os.mkdir(save_path)
+        weight_path = os.path.join(current_dir, WEIGHT_FOLDER)
+        model_path = os.path.join(current_dir, MODEL_FOLDER)
+
+        if os.path.exists(weight_path) is False:
+            os.mkdir(weight_path)
+
+        if os.path.exists(model_path) is False:
+            os.mkdir(model_path)
+
 
         def get_file_len(file_path):
             fp = open(file_path)
@@ -302,45 +306,47 @@ class FCN:
 def main(train, batch_size):
 
     net = FCN(num_labels=classes, batch_size=batch_size)
+
+    if LOAD_MODEL_FILE is not None and LOAD_MODEL_FILE != "":
+        net.model = load_model(join(MODEL_FOLDER, LOAD_MODEL_FILE), custom_objects={"CroppingLike2D": CroppingLike2D})
+        print("loaded existing model")
+    else:
+        net.build_network()
+        if LOAD_WEIGHT_FILE and LOAD_WEIGHT_FILE != "":
+            net.load_weights(LOAD_WEIGHT_FILE)
+            print("loaded weights and optimizer weights")
     if train:
         atexit.register(lambda x: x.on_exit(), net)
         sys.excepthook = new_except_hook(net)
 
-        if LOAD_MODEL_FILE is not None and LOAD_MODEL_FILE != "":
-            net.model = load_model(join(MODEL_FOLDER,LOAD_MODEL_FILE), custom_objects={"CroppingLike2D": CroppingLike2D})
-            print("loaded existing model")
-        else:
-            net.build_network()
-            if LOAD_WEIGHT_FILE and LOAD_WEIGHT_FILE != "":
-                net.load_weights(LOAD_WEIGHT_FILE)
-                print("loaded weights and optimizer weights")
+
 
         net.train()
 
         # Test results
         net.test_network(val_file_path, data_dir, label_dir)
 
-        # Display results
-        # TODO check if this is the most updated way.
-        def get_file_len(file_path):
-            fp = open(file_path)
-            lines = fp.readlines()
-            fp.close()
-            return len(lines)
+    # Display results
+    # TODO check if this is the most updated way.
+    def get_file_len(file_path):
+        fp = open(file_path)
+        lines = fp.readlines()
+        fp.close()
+        return len(lines)
 
-        size = get_file_len(val_file_path)
-        datagen = SegDataGenerator()
-        data_iter = datagen.flow_from_directory(file_path=val_file_path,
-                                                data_dir=data_dir, data_suffix='.jpg',
-                                                label_dir=label_dir, label_suffix='.png',
-                                                classes=classes, color_mode='rgb', batch_size=1)
-        for i in range(5):
-            index = np.random.choice(size)
-            data, label = data_iter._get_batches_of_transformed_samples([index])
+    size = get_file_len(val_file_path)
+    datagen = SegDataGenerator()
+    data_iter = datagen.flow_from_directory(file_path=val_file_path,
+                                            data_dir=data_dir, data_suffix='.jpg',
+                                            label_dir=label_dir, label_suffix='.png',
+                                            classes=classes, color_mode='rgb', batch_size=1)
+    for i in range(5):
+        index = np.random.choice(size)
+        data, label = data_iter._get_batches_of_transformed_samples([index])
 
-            predict = net.model.predict(preprocess_input(data.copy()))
-            prediction = np.argmax(predict.reshape(predict.shape[1:]), axis=2).astype(np.int)
-            plot_images(data.squeeze(), label.squeeze(), prediction)
+        predict = net.model.predict(preprocess_input(data.copy()))
+        prediction = np.argmax(predict.reshape(predict.shape[1:]), axis=2).astype(np.int)
+        display_results(data.squeeze().astype(int), label.squeeze(), prediction)
 
 
 if __name__ == '__main__':

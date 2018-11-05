@@ -43,6 +43,7 @@ WEIGHT_FILE = "weights"
 LOAD_WEIGHT_FILE = "final_weights"
 #LOAD_FILE = WEIGHT_FILE
 LOAD_MODEL_FILE = None
+MODEL_FILE = "model"
 MODEL_FOLDER = "models"
 
 
@@ -222,7 +223,7 @@ class FCN:
         This function saves the weights and model.
         :param prefix: The prefix of the files saved.
         """
-        model_name = MODEL_NAME
+        model_name = MODEL_FILE
         weight_name = WEIGHT_FILE
         if prefix is not None:
             model_name = "{0}_{1}".format(prefix, model_name)
